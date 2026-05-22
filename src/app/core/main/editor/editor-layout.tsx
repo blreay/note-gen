@@ -17,6 +17,9 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { MdEditor } from './markdown/md-editor-wrapper'
+import { SourceEditor } from './markdown/source-editor'
+import { matchesShortcut } from '@/lib/shortcut-match'
+import useShortcutStore from '@/stores/shortcut'
 import { TabBar, TabInfo } from './tab-bar'
 import { ImageEditor } from './image/image-editor'
 import { EmptyState } from './empty-state'
@@ -79,6 +82,57 @@ export function EditorLayout() {
   const [completedOnboardingStep, setCompletedOnboardingStep] = useState<OnboardingStepId | null>(null)
   const [showOrganizeNextStepDialog, setShowOrganizeNextStepDialog] = useState(false)
   const [onboardingResumeFilePath, setOnboardingResumeFilePath] = useState('')
+
+  const [sourceMode, setSourceMode] = useState(false)
+  const sourceContentRef = useRef<string>('')
+  const { shortcuts } = useShortcutStore()
+
+  const sourceModeShortcut = shortcuts.find(s => s.key === 'toggleSourceMode')?.value || 'CommandOrControl+T'
+
+  const handleToggleSourceMode = useCallback(() => {
+    setSourceMode(prev => {
+      const next = !prev
+      if (next) {
+        const currentTab = tabs.find(t => t.id === localActiveTabId)
+        if (currentTab && tabContentsRef.current[currentTab.path]) {
+          sourceContentRef.current = tabContentsRef.current[currentTab.path]
+        }
+      } else {
+        if (sourceContentRef.current) {
+          emitter.emit('external-content-update', sourceContentRef.current)
+        }
+      }
+      emitter.emit('source-mode-changed', next)
+      return next
+    })
+  }, [tabs, localActiveTabId])
+
+  useEffect(() => {
+    emitter.on('toggle-source-mode', handleToggleSourceMode)
+    return () => {
+      emitter.off('toggle-source-mode', handleToggleSourceMode)
+    }
+  }, [handleToggleSourceMode])
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (matchesShortcut(e, sourceModeShortcut)) {
+        e.preventDefault()
+        handleToggleSourceMode()
+      }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [sourceModeShortcut, handleToggleSourceMode])
+
+  const handleSourceContentChange = useCallback((content: string) => {
+    sourceContentRef.current = content
+    const currentTab = tabs.find(t => t.id === localActiveTabId)
+    if (currentTab) {
+      tabContentsRef.current[currentTab.path] = content
+      useArticleStore.getState().saveCurrentArticle(content)
+    }
+  }, [tabs, localActiveTabId])
 
   const persistOnboardingProgress = useCallback(async (progress: OnboardingProgress) => {
     const store = await Store.load('store.json')
@@ -292,10 +346,17 @@ export function EditorLayout() {
 
   // Handle tab switch
   const handleTabSwitch = useCallback((path: string) => {
+    if (sourceMode) {
+      if (sourceContentRef.current) {
+        emitter.emit('external-content-update', sourceContentRef.current)
+      }
+      setSourceMode(false)
+      emitter.emit('source-mode-changed', false)
+    }
     if (path) {
       setActiveFilePath(path)
     }
-  }, [setActiveFilePath])
+  }, [setActiveFilePath, sourceMode])
 
   // Handle new tab button - return to empty state without creating a file
   const handleNewTab = useCallback(async () => {
@@ -517,11 +578,18 @@ export function EditorLayout() {
         {itemType === 'image' && (
           <ImageEditor filePath={tab.path} />
         )}
-        {itemType === 'markdown' && (
+        {itemType === 'markdown' && !sourceMode && (
           <MdEditor
             key={tab.id}
             tabContentsRef={tabContentsRef}
             filePath={tab.path}
+          />
+        )}
+        {itemType === 'markdown' && sourceMode && (
+          <SourceEditor
+            initialContent={sourceContentRef.current}
+            onChange={handleSourceContentChange}
+            className="flex-1"
           />
         )}
         {itemType === 'unknown' && (
@@ -529,7 +597,7 @@ export function EditorLayout() {
         )}
       </div>
     )
-  }, [getItemType])
+  }, [getItemType, sourceMode, handleSourceContentChange])
 
   // No tabs or no active tab - show empty state
   if (tabs.length === 0 || !activeTabId) {
