@@ -23,6 +23,10 @@ const defaultShortcuts: Shortcut[] = [
   {
     key: 'quickRecordText',
     value: 'CommandOrControl+Shift+T'
+  },
+  {
+    key: 'toggleSourceMode',
+    value: 'CommandOrControl+T'
   }
 ]
 
