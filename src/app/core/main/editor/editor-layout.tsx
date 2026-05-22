@@ -109,8 +109,10 @@ export function EditorLayout() {
 
   useEffect(() => {
     emitter.on('toggle-source-mode', handleToggleSourceMode)
+    emitter.on('toggleSourceMode', handleToggleSourceMode)
     return () => {
       emitter.off('toggle-source-mode', handleToggleSourceMode)
+      emitter.off('toggleSourceMode', handleToggleSourceMode)
     }
   }, [handleToggleSourceMode])
 

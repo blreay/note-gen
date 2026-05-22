@@ -5,7 +5,8 @@ import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLi
 import { EditorState } from '@codemirror/state'
 import { markdown } from '@codemirror/lang-markdown'
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
-import { syntaxHighlighting, defaultHighlightStyle } from '@codemirror/language'
+import { HighlightStyle, syntaxHighlighting } from '@codemirror/language'
+import { tags as t } from '@lezer/highlight'
 import { oneDark } from '@codemirror/theme-one-dark'
 import { useTheme } from 'next-themes'
 
@@ -14,6 +15,21 @@ interface SourceEditorProps {
   onChange?: (content: string) => void
   className?: string
 }
+
+const lightHighlightStyle = HighlightStyle.define([
+  { tag: t.heading1, fontWeight: 'bold', fontSize: '1.4em' },
+  { tag: t.heading2, fontWeight: 'bold', fontSize: '1.2em' },
+  { tag: t.heading3, fontWeight: 'bold', fontSize: '1.1em' },
+  { tag: [t.heading4, t.heading5, t.heading6], fontWeight: 'bold' },
+  { tag: t.emphasis, fontStyle: 'italic' },
+  { tag: t.strong, fontWeight: 'bold' },
+  { tag: t.link, color: '#0366d6', textDecoration: 'underline' },
+  { tag: t.url, color: '#0366d6' },
+  { tag: t.monospace, color: '#e01e5a', backgroundColor: '#f6f8fa' },
+  { tag: t.meta, color: '#6f42c1' },
+  { tag: t.comment, color: '#6a737d' },
+  { tag: t.processingInstruction, color: '#22863a' },
+])
 
 export function SourceEditor({ initialContent, onChange, className }: SourceEditorProps) {
   const containerRef = useRef<HTMLDivElement>(null)
@@ -46,7 +62,7 @@ export function SourceEditor({ initialContent, onChange, className }: SourceEdit
     if (dark) {
       extensions.push(oneDark)
     } else {
-      extensions.push(syntaxHighlighting(defaultHighlightStyle))
+      extensions.push(syntaxHighlighting(lightHighlightStyle))
     }
 
     return extensions
