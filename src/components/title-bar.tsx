@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import { platform } from '@tauri-apps/plugin-os'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { isMobileDevice } from '@/lib/check'
-import { Search, Settings, Minus, Square, X, PanelLeft, PanelRight, SquarePen, Cog, CalendarDays } from 'lucide-react'
+import { Search, Settings, Minus, Square, X, PanelLeft, PanelRight, SquarePen, Cog, CalendarDays, Code2 } from 'lucide-react'
 import { usePathname, useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { useSidebarStore } from '@/stores/sidebar'
@@ -16,6 +16,7 @@ import { Button } from '@/components/ui/button'
 import useSettingStore from '@/stores/setting'
 import useArticleStore from '@/stores/article'
 import useUpdateStore from '@/stores/update'
+import emitter from '@/lib/emitter'
 import React from 'react'
 import { ControlText } from '@/app/core/main/mark/control-text'
 import { ControlRecording } from '@/app/core/main/mark/control-recording'
@@ -54,7 +55,18 @@ export function TitleBar({ onSearchClick, onActivityClick, activityOpen = false 
   const pathname = usePathname()
   const router = useRouter()
   const { leftSidebarVisible, centerPanelVisible, rightSidebarVisible, toggleLeftSidebar, toggleCenterPanel, toggleRightSidebar } = useSidebarStore()
-  
+  const [sourceMode, setSourceMode] = useState(false)
+
+  useEffect(() => {
+    const handleSourceModeChanged = (active: boolean) => {
+      setSourceMode(active)
+    }
+    emitter.on('source-mode-changed', handleSourceModeChanged as any)
+    return () => {
+      emitter.off('source-mode-changed', handleSourceModeChanged as any)
+    }
+  }, [])
+
   // 检查关闭面板后是否会导致"仅左"状态或无面板状态
   const wouldCauseLeftOnly = (currentVisible: boolean, panel: 'left' | 'center' | 'right') => {
     // 如果面板本来就不可见，不会导致问题（打开面板总是允许的）
@@ -275,6 +287,25 @@ export function TitleBar({ onSearchClick, onActivityClick, activityOpen = false 
             </TooltipTrigger>
             <TooltipContent side="bottom">
               <p>{leftSidebarVisible ? t('navigation.hideLeftSidebar') : t('navigation.showLeftSidebar')}</p>
+            </TooltipContent>
+          </Tooltip>
+
+          {/* 源码模式切换按钮 */}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className={`h-8 w-8 ${sourceMode ? 'bg-primary/10 text-primary hover:bg-primary/15' : ''}`}
+                onClick={() => {
+                  emitter.emit('toggle-source-mode')
+                }}
+              >
+                <Code2 className="h-4 w-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">
+              <p>{sourceMode ? t('navigation.wysiwygMode') : t('navigation.sourceMode')}</p>
             </TooltipContent>
           </Tooltip>
 
