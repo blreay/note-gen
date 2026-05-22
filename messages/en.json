@@ -1327,6 +1327,10 @@
         "quickRecordText": {
           "title": "Quick Record Text",
           "desc": "Quickly open the main window and switch to text recording."
+        },
+        "toggleSourceMode": {
+          "title": "Toggle Source Mode",
+          "desc": "Switch between rich text editor and Markdown source mode."
         }
       }
     }
@@ -2031,7 +2035,9 @@
     "hideCenterPanel": "Hide Editor",
     "showRightSidebar": "Show Right Sidebar",
     "hideRightSidebar": "Hide Right Sidebar",
-    "searchPlaceholder": "Search notes or records..."
+    "searchPlaceholder": "Search notes or records...",
+    "sourceMode": "Source Mode",
+    "wysiwygMode": "Rich Text Mode"
   },
   "activity": {
     "title": "Activity Calendar",

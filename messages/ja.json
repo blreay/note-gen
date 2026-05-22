@@ -1235,6 +1235,10 @@
         "quickRecordText": {
           "title": "テキストを素早く記録します",
           "desc": "主ウィンドウを開き、テキスト記録を表示します。"
+        },
+        "toggleSourceMode": {
+          "title": "ソースモード切替",
+          "desc": "リッチテキストエディタとMarkdownソースモードを切り替えます。"
         }
       }
     },
@@ -1933,7 +1937,9 @@
     "showRightSidebar": "右サイドバーを表示",
     "searchPlaceholder": "ノートまたは記録を検索...",
     "showCenterPanel": "显示编辑器",
-    "hideCenterPanel": "隐藏编辑器"
+    "hideCenterPanel": "隐藏编辑器",
+    "sourceMode": "ソースモード",
+    "wysiwygMode": "リッチテキストモード"
   },
   "activity": {
     "title": "アクティビティカレンダー",

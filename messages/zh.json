@@ -1315,6 +1315,10 @@
         "quickRecordText": {
           "title": "快速记录文本",
           "desc": "快速打开程序主窗口，并调出文本记录。"
+        },
+        "toggleSourceMode": {
+          "title": "切换源码模式",
+          "desc": "在富文本编辑器和 Markdown 源码模式之间切换。"
         }
       }
     }
@@ -1974,7 +1978,9 @@
     "hideCenterPanel": "隐藏编辑器",
     "showRightSidebar": "显示右侧边栏",
     "hideRightSidebar": "隐藏右侧边栏",
-    "searchPlaceholder": "搜索笔记或记录..."
+    "searchPlaceholder": "搜索笔记或记录...",
+    "sourceMode": "源码模式",
+    "wysiwygMode": "富文本模式"
   },
   "activity": {
     "title": "活跃度日历",

@@ -1286,6 +1286,10 @@
         "quickRecordText": {
           "title": "Gravação Rápida de Texto",
           "desc": "Abrir rapidamente a janela principal e alternar para a gravação de texto."
+        },
+        "toggleSourceMode": {
+          "title": "Alternar Modo Fonte",
+          "desc": "Alternar entre editor rich text e modo fonte Markdown."
         }
       }
     },
@@ -1985,7 +1989,9 @@
     "showRightSidebar": "Mostrar Barra Lateral Direita",
     "searchPlaceholder": "Pesquisar notas ou registros...",
     "showCenterPanel": "Mostrar editor",
-    "hideCenterPanel": "Ocultar editor"
+    "hideCenterPanel": "Ocultar editor",
+    "sourceMode": "Modo Fonte",
+    "wysiwygMode": "Modo Rich Text"
   },
   "activity": {
     "title": "Calendário de Atividade",
