@@ -30,7 +30,10 @@ const defaultShortcuts: Shortcut[] = [
   }
 ]
 
+const inAppOnlyShortcuts = new Set(['toggleSourceMode'])
+
 async function bindShortcut(shortcut: Shortcut) {
+  if (inAppOnlyShortcuts.has(shortcut.key)) return
   await unregisterAll()
   try {
     if (shortcut.value) {
