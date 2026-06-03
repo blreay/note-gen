@@ -1,5 +1,5 @@
 import { ReActStep, ToolCall, ToolResult } from './types'
-import { getToolByName, getToolDescriptions } from './tools'
+import { getToolByName, getToolDescriptions, getAllToolsSync } from './tools'
 import { skillManager } from '@/lib/skills'
 import useChatStore from '@/stores/chat'
 import useArticleStore from '@/stores/article'
@@ -195,6 +195,18 @@ export interface ReActConfig {
     fullContent?: string
   }
 }
+
+// ── 多模型输出格式兼容：后备解析用正则 ──────────────────────────────────
+// 剥离 DeepSeek/千问等模型内联的 <think> 思考块
+const THINK_BLOCK_RE = /<think\b[^>]*>[\s\S]*?<\/think\s*>/gi
+// 中文动作关键词变体（动作：create_file / 工具：create_file / 行动：create_file）
+const CHINESE_ACTION_RE = /(?:动作|工具|行动)[：:]\s*([a-zA-Z0-9_-]+)/i
+// Action: tool_name 之后直接跟 JSON（缺少 Action Input: 标签）
+const ACTION_MISSING_INPUT_RE = /Action:\s*([a-zA-Z0-9_-]+)\s*\n\s*(\{[\s\S]*)/i
+// 函数调用风格：tool_name({json}) 或 tool_name( {json} )
+const FUNC_CALL_RE = /^([a-zA-Z0-9_-]+)\s*\(\s*(\{[\s\S]*)\)\s*$/
+// 裸工具名 + JSON：tool_name {json}
+const BARE_TOOL_RE = /^([a-zA-Z0-9_-]+)\s+(\{[\s\S]*)$/
 
 export class ReActAgent {
   private config: ReActConfig
@@ -936,10 +948,49 @@ Final Answer: 无法完成任务，请稍后重试或检查 AI 配置`
     }
   }
 
+  /**
+   * 预处理 LLM 原始输出：剥离 <think> 块和外层 markdown 代码栏。
+   * 仅影响解析，不影响 UI 展示（think() 中的 onThought 回调使用原始文本）。
+   */
+  private preprocessThought(thought: string): string {
+    // 1. 剥离内联 <think>...</think> 块
+    //    DeepSeek/千问等模型有时在 content 中内联输出思考块（而非通过 reasoning_content 字段）
+    let cleaned = thought.replace(THINK_BLOCK_RE, '')
+
+    // 2. 剥离包裹整个动作块的外层 markdown 代码栏
+    //    某些模型会用 ```\n...\n``` 包裹整个 Thought/Action 输出
+    cleaned = cleaned.replace(/^```[a-z]*\n([\s\S]*?)\n?```\s*$/i, '$1')
+
+    return cleaned.trim()
+  }
+
+  /**
+   * 如果 JSON 字符串被 markdown 代码栏包裹，剥离代码栏并返回内部内容。
+   * 否则原样返回。
+   *
+   * 处理格式：
+   *   ```json\n{...}\n```
+   *   ```\n{...}\n```
+   *   `{...}`（单反引号包裹，较少见）
+   */
+  private extractJsonFromFence(raw: string): string {
+    // 三反引号代码栏（可带语言标签）
+    const fenceMatch = raw.match(/^```[a-z]*\s*\n?([\s\S]*?)\n?```\s*$/i)
+    if (fenceMatch) {
+      return fenceMatch[1].trim()
+    }
+    // 单反引号包裹
+    const singleMatch = raw.match(/^`(\{[\s\S]*?\})`\s*$/)
+    if (singleMatch) {
+      return singleMatch[1].trim()
+    }
+    return raw
+  }
+
   private parseAction(thought: string): { tool: string; params: Record<string, any> } | null {
     try {
-      // 首先检查是否包含 Final Answer - 如果是，返回 null
-      // 需要处理换行的情况，如 "Action: Final\nAnswer: ..."
+      // ── 守卫：Final Answer 优先于任何 Action ──────────────────────────
+      // （保持原有逻辑不变，使用原始 thought 检测）
       const normalizedThought = thought.replace(/\s+/g, ' ')
       if (normalizedThought.includes('Final Answer:') ||
           normalizedThought.includes('Final Answer：') ||
@@ -949,81 +1000,214 @@ Final Answer: 无法完成任务，请稍后重试或检查 AI 配置`
         return null
       }
 
-      // 修改正则表达式，支持工具名称中的连字符、下划线等字符
-      const actionMatch = thought.match(/Action:\s*([a-zA-Z0-9_-]+)/i)
+      // ── 预处理：剥离 <think> 块和外层代码栏 ────────────────────────────
+      const cleaned = this.preprocessThought(thought)
 
-      if (!actionMatch) {
-        return null
+      // 构建已知工具名集合（包括动态注册的 MCP 工具）
+      const knownToolNames = new Set(getAllToolsSync().map(t => t.name))
+
+      // ── 第 1 级（标准格式）：Action: / Action Input: ───────────────────
+      // 这是规范格式，最先尝试以确保现有行为零回退
+      const actionMatch = cleaned.match(/Action:\s*([a-zA-Z0-9_-]+)/i)
+      if (actionMatch) {
+        const tool = actionMatch[1]
+        let params: Record<string, any> = {}
+
+        // 使用更宽松的正则匹配，获取 Action Input 后的所有内容
+        const inputMatch = cleaned.match(/Action Input:\s*([\s\S]*)/i)
+        if (inputMatch) {
+          // 剥离可能的 markdown 代码栏包裹
+          let jsonStr = this.extractJsonFromFence(inputMatch[1].trim())
+
+          // 移除千问系列模型可能产生的标记符号
+          jsonStr = jsonStr.replace(/<\|begin_of_box\|>/g, '').replace(/<\|end_of_box\|>/g, '').trim()
+
+          // 定位 JSON 对象起始位置（跳过非 { 前缀内容）
+          const jsonStartIdx = jsonStr.indexOf('{')
+          if (jsonStartIdx > 0) {
+            jsonStr = jsonStr.slice(jsonStartIdx)
+          }
+
+          if (jsonStr.startsWith('{')) {
+            // 尝试找到完整的 JSON 对象（大括号配对计数）
+            let braceCount = 0
+            let jsonEnd = -1
+            let inString = false
+            let escapeNext = false
+
+            for (let i = 0; i < jsonStr.length; i++) {
+              const char = jsonStr[i]
+
+              if (escapeNext) {
+                escapeNext = false
+                continue
+              }
+
+              if (char === '\\') {
+                escapeNext = true
+                continue
+              }
+
+              if (char === '"' && !escapeNext) {
+                inString = !inString
+                continue
+              }
+
+              if (!inString) {
+                if (char === '{') {
+                  braceCount++
+                } else if (char === '}') {
+                  braceCount--
+                  if (braceCount === 0) {
+                    jsonEnd = i + 1
+                    break
+                  }
+                }
+              }
+            }
+
+            // 如果找到了完整的 JSON，截取它
+            if (jsonEnd > 0) {
+              jsonStr = jsonStr.substring(0, jsonEnd)
+            }
+
+            const parsed = parseActionInputJson(jsonStr)
+            if (!parsed) {
+              // 返回 null 而不是空对象，让调用方知道解析失败
+              return null
+            }
+
+            params = parsed
+          }
+        }
+
+        return { tool, params }
       }
 
-      const tool = actionMatch[1]
-      let params = {}
-      
-      // 使用更宽松的正则匹配，获取 Action Input 后的所有内容
-      const inputMatch = thought.match(/Action Input:\s*({[\s\S]*)/i)
-      
-      if (inputMatch) {
-        let jsonStr = inputMatch[1].trim()
-        
-        // 移除可能的标记符号（如 <|begin_of_box|> 和 <|end_of_box|>）
-        jsonStr = jsonStr.replace(/<\|begin_of_box\|>/g, '').replace(/<\|end_of_box\|>/g, '').trim()
-        
-        // 尝试找到完整的 JSON 对象
-        let braceCount = 0
-        let jsonEnd = -1
-        let inString = false
-        let escapeNext = false
-        
-        for (let i = 0; i < jsonStr.length; i++) {
-          const char = jsonStr[i]
-          
-          if (escapeNext) {
-            escapeNext = false
-            continue
+      // ── 第 2-5 级为保守后备：只匹配已知工具名 ──────────────────────────
+      // 防止普通文本触发误匹配
+
+      // ── 第 2 级：缺少 "Action Input:" 标签 ─────────────────────────────
+      // "Action: create_file\n{...}" — 有 Action 前缀但 JSON 直接跟在下一行
+      {
+        const m = cleaned.match(ACTION_MISSING_INPUT_RE)
+        if (m) {
+          const tool = m[1]
+          if (knownToolNames.has(tool)) {
+            const jsonStr = this.extractJsonFromFence(m[2].trim())
+            const params = this.extractJsonObject(jsonStr)
+            if (params) return { tool, params }
           }
-          
-          if (char === '\\') {
-            escapeNext = true
-            continue
+        }
+      }
+
+      // ── 第 3 级：中文关键词变体 ────────────────────────────────────────
+      // "动作：create_file" 或 "工具：create_file" 后跟 JSON
+      {
+        const m = cleaned.match(CHINESE_ACTION_RE)
+        if (m) {
+          const tool = m[1]
+          if (knownToolNames.has(tool)) {
+            const afterTool = cleaned.slice(cleaned.indexOf(m[0]) + m[0].length).trim()
+            const jsonStart = afterTool.indexOf('{')
+            if (jsonStart !== -1) {
+              const jsonStr = this.extractJsonFromFence(afterTool.slice(jsonStart))
+              const params = this.extractJsonObject(jsonStr)
+              if (params) return { tool, params }
+            }
+            // 无参数的工具调用
+            return { tool, params: {} }
           }
-          
-          if (char === '"' && !escapeNext) {
-            inString = !inString
-            continue
-          }
-          
-          if (!inString) {
-            if (char === '{') {
-              braceCount++
-            } else if (char === '}') {
-              braceCount--
-              if (braceCount === 0) {
-                jsonEnd = i + 1
-                break
-              }
+        }
+      }
+
+      // ── 第 4 级：函数调用风格 ──────────────────────────────────────────
+      // "create_file({...})" — 工具名后用括号包裹 JSON
+      {
+        for (const line of cleaned.split('\n')) {
+          const trimmed = line.trim()
+          const m = trimmed.match(FUNC_CALL_RE)
+          if (m) {
+            const tool = m[1]
+            if (knownToolNames.has(tool)) {
+              const jsonStr = this.extractJsonFromFence(m[2].trim())
+              const params = this.extractJsonObject(jsonStr)
+              if (params) return { tool, params }
             }
           }
         }
-        
-        // 如果找到了完整的 JSON，截取它
-        if (jsonEnd > 0) {
-          jsonStr = jsonStr.substring(0, jsonEnd)
-        }
-        
-        const parsed = parseActionInputJson(jsonStr)
-        if (!parsed) {
-          // 返回 null 而不是空对象，让调用方知道解析失败
-          return null
-        }
-
-        params = parsed
       }
 
-      return { tool, params }
+      // ── 第 5 级：裸 "toolName {...}" ───────────────────────────────────
+      // "create_file { \"fileName\": \"...\", ... }" — 最宽松的格式
+      {
+        for (const line of cleaned.split('\n')) {
+          const trimmed = line.trim()
+          const m = trimmed.match(BARE_TOOL_RE)
+          if (m) {
+            const tool = m[1]
+            if (knownToolNames.has(tool)) {
+              const jsonStr = this.extractJsonFromFence(m[2].trim())
+              const params = this.extractJsonObject(jsonStr)
+              if (params) return { tool, params }
+            }
+          }
+        }
+      }
+
+      return null
     } catch (error) {
       console.error('Failed to parse action:', error)
       return null
     }
+  }
+
+  /**
+   * 从原始字符串中提取第一个完整 JSON 对象。
+   * 使用大括号计数法定位边界，然后通过 parseActionInputJson 解析（含修复能力）。
+   */
+  private extractJsonObject(raw: string): Record<string, any> | null {
+    const start = raw.indexOf('{')
+    if (start === -1) return null
+
+    let braceCount = 0
+    let jsonEnd = -1
+    let inString = false
+    let escapeNext = false
+
+    for (let i = start; i < raw.length; i++) {
+      const char = raw[i]
+
+      if (escapeNext) {
+        escapeNext = false
+        continue
+      }
+
+      if (char === '\\') {
+        escapeNext = true
+        continue
+      }
+
+      if (char === '"' && !escapeNext) {
+        inString = !inString
+        continue
+      }
+
+      if (!inString) {
+        if (char === '{') {
+          braceCount++
+        } else if (char === '}') {
+          braceCount--
+          if (braceCount === 0) {
+            jsonEnd = i + 1
+            break
+          }
+        }
+      }
+    }
+
+    const jsonStr = jsonEnd > 0 ? raw.substring(start, jsonEnd) : raw.substring(start)
+    return parseActionInputJson(jsonStr)
   }
 
   private async act(toolName: string, params: Record<string, any>, thought?: string): Promise<string> {
