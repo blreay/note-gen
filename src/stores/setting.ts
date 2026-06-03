@@ -11,6 +11,7 @@ import { applyThemeColors, removeThemeColors } from '@/lib/theme-utils'
 import { getNormalizedImageHosting } from '@/lib/image-hosting-config'
 import { normalizeSpeechMode } from '@/lib/speech/preferences'
 import type { SpeechMode } from '@/lib/speech/types'
+import { logger } from '@/lib/logger'
 
 export enum GenTemplateRange {
   All = 'all',
@@ -256,6 +257,16 @@ interface SettingState {
   setKeepLatestCount: (count: number) => Promise<void>
   condenseMaxLength: number
   setCondenseMaxLength: (length: number) => Promise<void>
+
+  // 日志设置
+  logLevel: string
+  setLogLevel: (level: string) => Promise<void>
+  logDir: string
+  setLogDir: (dir: string) => Promise<void>
+  logMaxFileSize: number
+  setLogMaxFileSize: (size: number) => Promise<void>
+  logMaxFiles: number
+  setLogMaxFiles: (count: number) => Promise<void>
 }
 
 export interface ChatToolbarItem {
@@ -564,6 +575,31 @@ const useSettingStore = create<SettingState>((set, get) => ({
         }
       } else {
         await store.set(key, value)
+      }
+    })
+
+    // Initialize logger with current config
+    const currentState = get()
+    await logger.init({
+      level: currentState.logLevel,
+      dir: currentState.logDir,
+      maxFileSize: currentState.logMaxFileSize,
+      maxFiles: currentState.logMaxFiles,
+    })
+
+    // Subscribe to log config changes for hot-reload
+    useSettingStore.subscribe((state, prevState) => {
+      if (state.logLevel !== prevState.logLevel) {
+        logger.setLevel(state.logLevel)
+      }
+      if (state.logDir !== prevState.logDir) {
+        logger.setDir(state.logDir)
+      }
+      if (state.logMaxFileSize !== prevState.logMaxFileSize) {
+        logger.setMaxFileSize(state.logMaxFileSize)
+      }
+      if (state.logMaxFiles !== prevState.logMaxFiles) {
+        logger.setMaxFiles(state.logMaxFiles)
       }
     })
   },
@@ -1231,6 +1267,36 @@ const useSettingStore = create<SettingState>((set, get) => ({
     set({ showEditorUndoRedo: show })
     const store = await Store.load('store.json');
     await store.set('showEditorUndoRedo', show)
+    await store.save()
+  },
+
+  // 日志设置
+  logLevel: 'error',
+  setLogLevel: async (logLevel: string) => {
+    set({ logLevel })
+    const store = await Store.load('store.json')
+    await store.set('logLevel', logLevel)
+    await store.save()
+  },
+  logDir: '',
+  setLogDir: async (logDir: string) => {
+    set({ logDir })
+    const store = await Store.load('store.json')
+    await store.set('logDir', logDir)
+    await store.save()
+  },
+  logMaxFileSize: 10,
+  setLogMaxFileSize: async (logMaxFileSize: number) => {
+    set({ logMaxFileSize })
+    const store = await Store.load('store.json')
+    await store.set('logMaxFileSize', logMaxFileSize)
+    await store.save()
+  },
+  logMaxFiles: 5,
+  setLogMaxFiles: async (logMaxFiles: number) => {
+    set({ logMaxFiles })
+    const store = await Store.load('store.json')
+    await store.set('logMaxFiles', logMaxFiles)
     await store.save()
   },
 }))
