@@ -17,6 +17,9 @@ import { getToolByName } from "@/lib/agent/tools"
 import { getSessionApprovalScope, matchesSessionApproval } from "@/lib/agent/session-approval"
 import { ImageAttachment } from "./image-attachments"
 import type { RagSource } from "@/lib/rag"
+import { logger } from '@/lib/logger'
+
+const log = logger.child('chat')
 
 interface QuoteData {
   quote: string
@@ -167,6 +170,7 @@ export const ChatSend = forwardRef<{ sendChat: () => void }, ChatSendProps>(({ i
       filePath?: string
     }
   ): Promise<boolean> => {
+    log.debug(`requestConfirmation: tool=${toolName}`)
     const tool = getToolByName(toolName)
     const sessionApprovalScope = getSessionApprovalScope(toolName, tool, params)
     const canApproveForSession = !!sessionApprovalScope
@@ -182,6 +186,7 @@ export const ChatSend = forwardRef<{ sendChat: () => void }, ChatSendProps>(({ i
       autoApproveRuntimeSkillId,
       sessionApprovalScope
     )) {
+      log.debug(`  autoApproval matched`)
       return Promise.resolve(true)
     }
 
@@ -207,6 +212,7 @@ export const ChatSend = forwardRef<{ sendChat: () => void }, ChatSendProps>(({ i
         if (!currentState.agentState.pendingConfirmation) {
           clearInterval(checkInterval)
           // 如果 Agent 仍在运行，说明用户确认了
+          log.debug(`  user responded: confirmed=${currentState.agentState.isRunning}`)
           resolve(currentState.agentState.isRunning)
         }
       }, 100)
@@ -215,6 +221,7 @@ export const ChatSend = forwardRef<{ sendChat: () => void }, ChatSendProps>(({ i
 
   // Agent 模式处理
   async function handleAgentMode(imageUrls: string[]) {
+    log.debug(`handleAgentMode: images=${imageUrls.length}`)
     // 先创建一个占位的 AI 消息
     const placeholderMessage = await insert({
       tagId: currentTagId,
@@ -254,6 +261,7 @@ export const ChatSend = forwardRef<{ sendChat: () => void }, ChatSendProps>(({ i
       },
       formatAutoFinalAnswer: (key, values) => t(key as any, values),
       onComplete: async (result, steps, stopped) => {
+        log.debug(`onComplete: resultLen=${result.length} stopped=${stopped}`)
         // 获取 Agent 执行历史，保存完整的 ReAct 步骤
         const { agentState } = useChatStore.getState()
         // 使用 agentState.completedSteps 而不是 steps 参数，因为 completedSteps 包含 duration 信息
@@ -368,6 +376,8 @@ export const ChatSend = forwardRef<{ sendChat: () => void }, ChatSendProps>(({ i
         context = `## 当前打开的笔记\n文件路径: ${articleStore.activeFilePath}\n\n内容:\n${articleStore.currentArticle}\n\n`
       }
 
+      log.debug(`  context: activeFile="${articleStore.activeFilePath}" contextLen=${context.length}`)
+
       // 2. 如果启用 RAG，获取知识库相关上下文
       if (isRagEnabled) {
         try {
@@ -394,6 +404,8 @@ export const ChatSend = forwardRef<{ sendChat: () => void }, ChatSendProps>(({ i
 
             ragSources = ragResult.sources
             ragSourceDetails = ragResult.sourceDetails
+
+            log.debug(`  context: ragEnabled=true sources=${ragSources?.length || 0}`)
 
             // 设置到 agentState，用于实时显示
             setAgentState({
@@ -448,6 +460,8 @@ export const ChatSend = forwardRef<{ sendChat: () => void }, ChatSendProps>(({ i
           if (linkedFileContent) {
             context += `\n## 关联文件完整内容\n\nThe full content of the linked file "${linkedResource.name}" (${linkedResource.relativePath}) is already included below. Do not call tools to read or check this same file again unless the user explicitly asks to refresh it.\n\n---\n${linkedFileContent}\n---\n`
           }
+
+          log.debug(`  context: linkedFile contentLen=${linkedFileContent?.length || 0}`)
         } catch (error) {
           console.error('Failed to read linked file in Agent mode:', error)
         }
@@ -553,6 +567,8 @@ ${hasValidRange ? `**仅在用户明确要求修改/改写/补充/插入时才�
           maxUserMessages: shouldCarryUserHistoryForAgent(inputValue) ? 3 : 0,
         }
       )
+
+      log.debug(`  messages built: count=${messages.length}`)
 
       await agentHandler.execute(inputValue, messages, imageUrls)
     } catch (error) {
