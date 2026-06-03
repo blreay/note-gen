@@ -1155,6 +1155,32 @@ Final Answer: 无法完成任务，请稍后重试或检查 AI 配置`
         }
       }
 
+      // ── 第 6 级：全文扫描嵌入式工具调用 ────────────────────────────────
+      // 某些 thinking 模型（DeepSeek-R1、千问-QwQ 等）会在一大段思考文字的
+      // 末尾或中间直接输出 "tool_name {json}" 或 "tool_name({json})"，
+      // 工具名不在行首。对全文做已知工具名的扫描。
+      {
+        for (const toolName of knownToolNames) {
+          // 构建带字边界的正则，避免部分匹配（如 "list_markdown_files" 误匹配 "markdown_files"）
+          // 工具名后面可以紧跟 ({json}) 或 空格/{json}
+          const escaped = toolName.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&')
+          const re = new RegExp(`(?:^|\\s|[，。；、：])${escaped}\\s*(?:\\(\\s*)?(\\{[\\s\\S]*)`, 'i')
+          const m = cleaned.match(re)
+          if (m) {
+            let jsonCandidate = m[1].trim()
+            // 如果是函数调用风格 tool_name({...})，去掉末尾的 )
+            if (cleaned.match(new RegExp(`${escaped}\\s*\\(`))) {
+              const lastParen = jsonCandidate.lastIndexOf(')')
+              if (lastParen > jsonCandidate.lastIndexOf('}')) {
+                jsonCandidate = jsonCandidate.substring(0, lastParen)
+              }
+            }
+            const params = this.extractJsonObject(jsonCandidate)
+            if (params) return { tool: toolName, params }
+          }
+        }
+      }
+
       return null
     } catch (error) {
       console.error('Failed to parse action:', error)
