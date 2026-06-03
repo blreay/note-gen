@@ -16,6 +16,7 @@ import {
   formatIntentPolicyForPrompt,
 } from './tool-policy'
 import OpenAI from 'openai'
+import { logger } from '@/lib/logger'
 
 function buildIterationUserMessage(
   iteration: number,
@@ -222,6 +223,7 @@ export class ReActAgent {
     allowDestructive: false,
     allowExecute: false,
   }
+  private log = logger.child('agent/react')
 
   constructor(config: ReActConfig) {
     this.config = config
@@ -258,6 +260,11 @@ export class ReActAgent {
     // 创建新的 AbortController
     this.abortController = new AbortController()
 
+    const traceId = `agent-${Date.now()}`
+    const startTime = Date.now()
+    this.log.debug(`▶ run start traceId=${traceId} input="${userInput.slice(0, 80)}" inputLen=${userInput.length} maxIter=${this.config.maxIterations}`)
+    this.log.debug(`  intentPolicy: write=${this.intentPolicy.allowWrite} destructive=${this.intentPolicy.allowDestructive} execute=${this.intentPolicy.allowExecute}`)
+
     let finalAnswer = ''
 
     // 检测 contextOrMessages 的类型
@@ -273,6 +280,8 @@ export class ReActAgent {
       }
 
       this.currentIteration++
+
+      this.log.debug(`── iteration ${this.currentIteration}/${this.config.maxIterations} start ──`)
 
       // 在新迭代开始时，通知保存上一次的思考到历史
       if (this.currentIteration > 1) {
@@ -299,6 +308,7 @@ export class ReActAgent {
         })
         if (descriptor) {
           finalAnswer = this.config.formatAutoFinalAnswer?.(descriptor.key, descriptor.values) || descriptor.fallback
+          this.log.debug(`  auto-recovery triggered, tool=${lastCompletedStep.action?.tool} key=${descriptor.key}`)
           break
         }
       }
@@ -333,6 +343,7 @@ export class ReActAgent {
           }
         }
 
+        this.log.debug(`  finalAnswer detected, len=${(finalAnswer || '').length}`)
         const finalAnswerValidation = this.validateFinalAnswerReadiness(userInput, finalAnswer || '')
         if (!finalAnswerValidation.ok) {
           const observation = finalAnswerValidation.reason || '最终答案校验未通过，请继续执行实际工具。'
@@ -343,6 +354,7 @@ export class ReActAgent {
             observation,
           })
           finalAnswer = ''
+          this.log.debug(`  finalAnswer validation failed: ${finalAnswerValidation.reason}`)
           continue
         }
         break
@@ -369,6 +381,7 @@ export class ReActAgent {
             action: undefined,
             observation,
           })
+          this.log.debug(`  parseAction: null (Action: present, JSON unparseable) thoughtLen=${thought.length}`)
           continue
         }
 
@@ -378,6 +391,7 @@ export class ReActAgent {
         if (thoughtContent && thoughtContent.length > 10 && !thoughtContent.includes('Action:')) {
           // 看起来 AI 想直接回答，提取内容作为答案
           finalAnswer = thoughtContent
+          this.log.debug(`  parseAction: null, no Action found, treating as finalAnswer, thoughtLen=${thought.length}`)
           break
         }
 
@@ -385,13 +399,17 @@ export class ReActAgent {
         // 尝试让 AI 直接回答而不是调用工具
         if (this.currentIteration === 1) {
           finalAnswer = thoughtContent || '抱歉，我不太理解您的需求。您能详细说明一下吗？'
+          this.log.debug(`  parseAction: null, no Action found, treating as finalAnswer, thoughtLen=${thought.length}`)
           break
         }
 
         // 多次迭代后仍然失败，给出提示
         finalAnswer = thoughtContent || '抱歉，我遇到了一些问题。您能换种方式说明一下您的需求吗？'
+        this.log.debug(`  parseAction: null, no Action found, treating as finalAnswer, thoughtLen=${thought.length}`)
         break
       }
+
+      this.log.debug(`  parseAction: tool=${action.tool} params=${JSON.stringify(Object.keys(action.params))}`)
 
       // 检测重复操作
       const lastStep = this.steps[this.steps.length - 1]
@@ -406,6 +424,7 @@ export class ReActAgent {
           } else {
             // 检测到重复操作，给出警告并结束
             console.warn(`检测到重复操作: ${action.tool}`, action.params)
+            this.log.debug(`  duplicate action detected: tool=${action.tool}`)
             finalAnswer = `操作已完成。${lastStep.observation}`
             break
           }
@@ -430,6 +449,7 @@ export class ReActAgent {
 
         if (sameActionCount >= 5) {
           console.warn(`检测到连续多次执行相同操作: ${action.tool}, 次数: ${sameActionCount}`)
+          this.log.debug(`  duplicate action detected: tool=${action.tool}`)
           finalAnswer = `检测到连续多次执行相同操作，已自动停止。最后操作结果：${lastStep.observation}`
           break
         }
@@ -438,6 +458,8 @@ export class ReActAgent {
       this.config.onAction?.(action.tool, action.params)
 
       const observation = await this.act(action.tool, action.params, thought)
+
+      this.log.debug(`  act() result: observationLen=${observation.length}`)
 
       // 检查是否已停止
       if (this.stopped) {
@@ -453,6 +475,8 @@ export class ReActAgent {
         observation,
       })
 
+      this.log.debug(`── iteration ${this.currentIteration}/${this.config.maxIterations} end ──`)
+
       if (observation.includes('错误') || observation.includes('失败')) {
         if (this.currentIteration >= this.config.maxIterations - 1) {
           finalAnswer = `执行过程中遇到问题：${observation}`
@@ -465,6 +489,7 @@ export class ReActAgent {
       finalAnswer = '已达到最大迭代次数，任务可能未完全完成。'
     }
 
+    this.log.debug(`◀ run end traceId=${traceId} iterations=${this.currentIteration} steps=${this.steps.length} resultLen=${finalAnswer.length} elapsed=${Date.now() - startTime}ms`)
     return finalAnswer || '任务执行完成。'
   }
 
@@ -737,6 +762,7 @@ Final Answer: I found 3 notes about React hooks: [summary of findings]
 
 Now start executing the task!`
 
+    this.log.debug(`  systemPrompt built, len=${prompt.length}`)
     return prompt
   }
 
@@ -806,6 +832,11 @@ Observation: ${step.observation}
 
         // 传递 AbortSignal 以支持终止，同时传递图片URL（仅在第一次迭代时）
         const imagesForThisIteration = this.currentIteration === 1 ? imageUrls : undefined
+        const thinkStart = Date.now()
+        this.log.debug(`  think() calling LLM, mode=messages, iter=${this.currentIteration} hasImages=${!!imagesForThisIteration}`)
+        if (this.log.isTraceEnabled()) {
+          this.log.trace('think() LLM request messages:', JSON.stringify(messagesForAI.map(m => ({ role: m.role, contentLen: typeof m.content === 'string' ? m.content.length : 0 }))))
+        }
         await fetchAiStream('', (content) => {
           // 检查是否已终止
           if (this.stopped) {
@@ -839,6 +870,11 @@ Final Answer: Task was terminated by user`
           this.config.onThought?.(response)
         }
 
+        this.log.debug(`  think() LLM responded, responseLen=${response.length} elapsed=${Date.now() - thinkStart}ms`)
+        if (this.log.isTraceEnabled()) {
+          this.log.trace('think() LLM full response:', response)
+        }
+
         // 第一次迭代后，不再根据文本提及自动选择 Skills。
         // 只有显式调用 select_skill 工具才会生效，避免误命中无关 Skill。
         if (this.currentIteration === 1) {
@@ -853,6 +889,7 @@ Final Answer: Task was terminated by user`
 Final Answer: Task was terminated by user`
         }
 
+        this.log.error('think() API error:', error instanceof Error ? error.message : String(error))
         console.error('LLM API call failed:', error)
         // 如果 API 调用失败，返回错误提示
         return `Thought: Sorry, AI service is temporarily unavailable
@@ -894,6 +931,8 @@ ${buildIterationUserMessage(this.currentIteration, userInput, lastObservation)}`
 
       // 传递 AbortSignal 以支持终止，同时传递图片URL（仅在第一次迭代时）
       const imagesForThisIteration = this.currentIteration === 1 ? imageUrls : undefined
+      const thinkStart = Date.now()
+      this.log.debug(`  think() calling LLM, mode=string, iter=${this.currentIteration} hasImages=${!!imagesForThisIteration}`)
       await fetchAiStream(prompt, (content) => {
         // 检查是否已终止
         if (this.stopped) {
@@ -927,6 +966,11 @@ Final Answer: 任务已被用户终止`
         this.config.onThought?.(response)
       }
 
+      this.log.debug(`  think() LLM responded, responseLen=${response.length} elapsed=${Date.now() - thinkStart}ms`)
+      if (this.log.isTraceEnabled()) {
+        this.log.trace('think() LLM full response:', response)
+      }
+
       // 第一次迭代后，不再根据文本提及自动选择 Skills。
       // 只有显式调用 select_skill 工具才会生效，避免误命中无关 Skill。
       if (this.currentIteration === 1) {
@@ -940,7 +984,8 @@ Final Answer: 任务已被用户终止`
         return `Thought: 用户终止了任务
 Final Answer: 任务已被用户终止`
       }
-      
+
+      this.log.error('think() API error:', error instanceof Error ? error.message : String(error))
       console.error('LLM API call failed:', error)
       // 如果 API 调用失败，返回错误提示
       return `Thought: 抱歉，AI 服务暂时不可用
@@ -1081,6 +1126,7 @@ Final Answer: 无法完成任务，请稍后重试或检查 AI 配置`
           }
         }
 
+        this.log.debug(`  parseAction: level-1 matched, tool=${tool} paramsKeys=${JSON.stringify(Object.keys(params))}`)
         return { tool, params }
       }
 
@@ -1096,7 +1142,10 @@ Final Answer: 无法完成任务，请稍后重试或检查 AI 配置`
           if (knownToolNames.has(tool)) {
             const jsonStr = this.extractJsonFromFence(m[2].trim())
             const params = this.extractJsonObject(jsonStr)
-            if (params) return { tool, params }
+            if (params) {
+              this.log.debug(`  parseAction: level-2 matched, tool=${tool}`)
+              return { tool, params }
+            }
           }
         }
       }
@@ -1113,9 +1162,13 @@ Final Answer: 无法完成任务，请稍后重试或检查 AI 配置`
             if (jsonStart !== -1) {
               const jsonStr = this.extractJsonFromFence(afterTool.slice(jsonStart))
               const params = this.extractJsonObject(jsonStr)
-              if (params) return { tool, params }
+              if (params) {
+                this.log.debug(`  parseAction: level-3 matched, tool=${tool}`)
+                return { tool, params }
+              }
             }
             // 无参数的工具调用
+            this.log.debug(`  parseAction: level-3 matched, tool=${tool}`)
             return { tool, params: {} }
           }
         }
@@ -1132,7 +1185,10 @@ Final Answer: 无法完成任务，请稍后重试或检查 AI 配置`
             if (knownToolNames.has(tool)) {
               const jsonStr = this.extractJsonFromFence(m[2].trim())
               const params = this.extractJsonObject(jsonStr)
-              if (params) return { tool, params }
+              if (params) {
+                this.log.debug(`  parseAction: level-4 matched, tool=${tool}`)
+                return { tool, params }
+              }
             }
           }
         }
@@ -1149,7 +1205,10 @@ Final Answer: 无法完成任务，请稍后重试或检查 AI 配置`
             if (knownToolNames.has(tool)) {
               const jsonStr = this.extractJsonFromFence(m[2].trim())
               const params = this.extractJsonObject(jsonStr)
-              if (params) return { tool, params }
+              if (params) {
+                this.log.debug(`  parseAction: level-5 matched, tool=${tool}`)
+                return { tool, params }
+              }
             }
           }
         }
@@ -1176,11 +1235,15 @@ Final Answer: 无法完成任务，请稍后重试或检查 AI 配置`
               }
             }
             const params = this.extractJsonObject(jsonCandidate)
-            if (params) return { tool: toolName, params }
+            if (params) {
+              this.log.debug(`  parseAction: level-6 matched, tool=${toolName}`)
+              return { tool: toolName, params }
+            }
           }
         }
       }
 
+      this.log.debug(`  parseAction: no match, thoughtLen=${cleaned.length}`)
       return null
     } catch (error) {
       console.error('Failed to parse action:', error)
@@ -1255,6 +1318,7 @@ Final Answer: 无法完成任务，请稍后重试或检查 AI 配置`
     }
 
     const policyCheck = this.evaluateToolPolicy(toolName, tool, params)
+    this.log.debug(`  act() tool=${toolName} policy: allowed=${policyCheck.allowed} confirmation=${policyCheck.requiresConfirmation} reason=${policyCheck.reason || 'none'}`)
     if (!policyCheck.allowed) {
       const blockedMessage = this.getPolicyAdjustmentMessage(toolName, policyCheck.reason || '已调整工具选择')
       const isBenignAdjustment = Boolean(policyCheck.reason?.includes('完整内容已在上下文中'))
@@ -1265,6 +1329,7 @@ Final Answer: 无法完成任务，请稍后重试或检查 AI 配置`
         message: blockedMessage,
       }
       this.config.onToolCall?.(toolCall)
+      this.log.debug(`  act() blocked by policy: ${policyCheck.reason}`)
       return blockedMessage
     }
 
@@ -1285,6 +1350,8 @@ Final Answer: 无法完成任务，请稍后重试或检查 AI 配置`
     // 检查工具是否在当前激活的 Skills 中被授权
     const isAuthorized = this.isToolAuthorized(toolName)
     const requiresConfirmation = policyCheck.requiresConfirmation || (tool.requiresConfirmation && !isAuthorized)
+
+    this.log.debug(`  act() confirmation: required=${requiresConfirmation}`)
 
     if (requiresConfirmation && !this.config.requestConfirmation) {
       toolCall.status = 'error'
@@ -1553,6 +1620,12 @@ Final Answer: 无法完成任务，请稍后重试或检查 AI 配置`
           }
         }
 
+        this.log.debug(`  act() execute result: success=${result.success} observationLen=${observation.length}`)
+        if (this.log.isTraceEnabled()) {
+          this.log.trace('act() execute params:', JSON.stringify(params))
+          this.log.trace('act() execute result:', JSON.stringify(result))
+        }
+
         return observation
       } else {
         const errorMsg = result.error || '未知错误'
@@ -1575,6 +1648,7 @@ Final Answer: 无法完成任务，请稍后重试或检查 AI 配置`
         error: errorStr,
       }
       this.config.onToolCall?.(toolCall)
+      this.log.error(`act() tool=${toolName} exception:`, errorStr)
       return `工具 ${toolName} 执行出错：${errorStr}`
     }
   }
@@ -2245,15 +2319,18 @@ ${skillsList.join('\n---\n\n')}
     const requestedEdit = /修改|编辑|改成|改为|改回|替换|删除|移动|重命名|复制|插入|rewrite|edit|modify|change|replace|delete|move|rename|copy|insert/.test(normalizedInput)
 
     if (actionLikeRequest && requestedArtifact && claimsExecution && !this.hasSubstantiveSuccessfulAction()) {
+      const reason = hasOnlySupportSteps
+        ? '仅完成了 Skill 选择或说明读取，尚未真正执行创建/脚本工具，不能宣称文件已生成。请继续执行实际工具。'
+        : '尚未获得真实工具成功结果，不能宣称文件已生成、已保存或已验证。请继续执行实际工具。'
+      this.log.debug(`  validateFinalAnswerReadiness: ok=false reason=”${reason}”`)
       return {
         ok: false,
-        reason: hasOnlySupportSteps
-          ? '仅完成了 Skill 选择或说明读取，尚未真正执行创建/脚本工具，不能宣称文件已生成。请继续执行实际工具。'
-          : '尚未获得真实工具成功结果，不能宣称文件已生成、已保存或已验证。请继续执行实际工具。',
+        reason,
       }
     }
 
     if (this.selectedSkills.size > 0 && claimsExecution && !this.hasSubstantiveSuccessfulAction()) {
+      this.log.debug(`  validateFinalAnswerReadiness: ok=false reason=”已选择 Skill，但还没有真正完成执行步骤。请先完成 create_file、execute_skill_script 或其他实际工具调用，再给最终答案。”`)
       return {
         ok: false,
         reason: '已选择 Skill，但还没有真正完成执行步骤。请先完成 create_file、execute_skill_script 或其他实际工具调用，再给最终答案。',
@@ -2261,19 +2338,22 @@ ${skillsList.join('\n---\n\n')}
     }
 
     if (normalizedAnswer.includes('验证通过') && !this.hasSubstantiveSuccessfulAction()) {
+      this.log.debug(`  validateFinalAnswerReadiness: ok=false reason=”还没有真实执行结果可供验证，不能声称”已验证通过”。请先执行实际工具。”`)
       return {
         ok: false,
-        reason: '还没有真实执行结果可供验证，不能声称“已验证通过”。请先执行实际工具。',
+        reason: '还没有真实执行结果可供验证，不能声称”已验证通过”。请先执行实际工具。',
       }
     }
 
     if (actionLikeRequest && requestedEdit && claimsEditApplied && !this.hasSuccessfulMutationAction()) {
+      this.log.debug(`  validateFinalAnswerReadiness: ok=false reason=”还没有成功的写入/编辑工具结果，不能声称内容已修改。请继续执行实际编辑工具，再给最终答案。”`)
       return {
         ok: false,
         reason: '还没有成功的写入/编辑工具结果，不能声称内容已修改。请继续执行实际编辑工具，再给最终答案。',
       }
     }
 
+    this.log.debug('  validateFinalAnswerReadiness: ok=true')
     return { ok: true }
   }
 }
