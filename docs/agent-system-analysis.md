@@ -1423,3 +1423,257 @@ create_file execute()    [note-tools.ts 第 244 行]
 | 非 `.md` 文件会自动打开吗？ | **不会**。只出现在侧边栏目录树中，不在编辑器中打开 |
 | 这些 UI 更新逻辑在 Agent 流程的哪一步？ | 在 `act()` → `tool.execute()` 内部，即工具执行阶段。Agent 的 `onComplete` 回调**不做任何文件树刷新** |
 | 文件树更新是读盘还是内存操作？ | 优先内存操作（`insertLocalEntry` 直接操作树结构），只在失败时兜底读盘（`loadFileTree`） |
+
+---
+
+### Q3: 输入一条指令后，NoteGen 实际发送给大模型的完整提示词长什么样？
+
+以用户输入 **「在当前文件末尾增加git的常用使用方式」** 为例，假设当前打开了 `技术/git-guide.md`，没有关联文件、没有引用选中、没有图片，Skill 列表中有一个 `style-detector`，没有 MCP 工具，没有存储记忆。
+
+#### 消息数组结构
+
+NoteGen 发送给大模型的是一个包含 **3 条消息**的数组（第 1 轮迭代）：
+
+```typescript
+messagesForAI = [
+  { role: "system",  content: "..." },   // 消息 1：系统提示词（buildSystemPrompt 生成）
+  { role: "system",  content: "..." },   // 消息 2：上下文（当前打开的文件内容）
+  { role: "user",    content: "..." },   // 消息 3：用户请求（buildIterationUserMessage 生成）
+]
+```
+
+组装逻辑在 `react.ts` 的 `think()` 方法中（第 762-799 行）。
+
+#### 消息 1 — 系统提示词
+
+由 `buildSystemPrompt()`（`react.ts` 第 471-741 行）拼接，包含以下部分：
+
+```markdown
+You are an efficient AI agent that uses tools to help users complete tasks.
+Follow the ReAct framework: Thought → Action → Observation.
+
+                              ← 如果有用户记忆，这里会有 ## User Memories 区块
+
+## 🚨 Important Warning: Skills Are Not Tools
+...（Skill 不是工具的警告）...
+
+## Core Principles
+**Intent First**: Before using any tool, carefully analyze user's intent:
+- Is the user asking a question? → Give direct answer with Final Answer
+- Is the user requesting information? → Search/read relevant notes, then answer
+- Is the user explicitly requesting an action? → Then use tools
+...
+
+## Knowledge Base Search Guide
+...（搜索工具使用指南）...
+
+## 🚨 Critical: Understanding Notes vs Tags vs Marks
+...（笔记/标签/收藏的区别说明表格）...
+
+## Available Tools                    ← 🔑 这就是大模型"知道"有哪些工具的关键
+
+### list_markdown_files
+List all Markdown files in the workspace.
+Category: note
+Requires Confirmation: No
+Parameters:
+  None
+
+### read_markdown_file
+Read the saved on-disk content of a Markdown note by path.
+Category: note
+Requires Confirmation: No
+Parameters:
+  - filePath (string, required): Path of the Markdown file
+
+### create_file
+Create a new file in the file system.
+Category: note
+Requires Confirmation: Yes
+Parameters:
+  - fileName (string, required): Filename (including extension)
+  - content (string, required): File content (plain text)
+  - folderPath (string, optional): Subfolder path, defaults to root
+
+### get_editor_content
+📝 **Editor Operation**: Get the current complete content of the editor.
+Category: editor
+Requires Confirmation: No
+Parameters:
+  None
+
+### replace_editor_content
+📝 **Editor Operation**: Replace content in the specified range.
+Category: editor
+Requires Confirmation: No
+Parameters:
+  - startLine (number, optional): Start line number (1-based)
+  - endLine (number, optional): End line number (1-based)
+  - replaceContent (string, optional): New content to replace with
+  - version (number, optional): Version number from get_editor_content
+  ...
+
+### insert_at_cursor
+📝 **Editor Operation**: Insert content at the current cursor position.
+Category: editor
+Requires Confirmation: No
+Parameters:
+  - content (string, required): Content to insert (Markdown format)
+
+### select_skill
+Select one or more Skills to guide task execution.
+Category: system
+Requires Confirmation: No
+Parameters:
+  - skill_ids (array, required): List of Skill IDs to select
+
+...（共 60+ 个工具，全部以上述格式逐一列出，包括
+     笔记工具 15 个、编辑器工具 4 个、文件夹工具 6 个、
+     系统工具 4 个、对话工具 9 个、标签工具 7 个、
+     标记工具 11 个、记忆工具 4 个）...
+
+## Available Skills                    ← 第 1 轮只发送摘要
+
+**Step 1: Use select_skill tool to choose appropriate Skill**
+
+### style-detector
+- Description: 检测并模仿文档写作风格
+- ID: style-detector
+
+**🚨 You MUST use tool to select Skill!**
+
+Correct way:
+  Thought: I need to select style-detector Skill
+  Action: select_skill
+  Action Input: {"skill_ids": ["style-detector"]}
+
+After selecting Skill, complete instructions will be provided in next iteration.
+
+## Output Format Requirements         ← 告诉大模型必须按什么格式输出
+
+### Format 1: Think and Execute Tool
+  Thought: [thinking process]
+  Action: tool_name
+  Action Input: {"param1": "value1"}
+
+### Format 2: Give Final Answer
+  Thought: I have completed all operations
+  Final Answer: [user-friendly answer]
+
+## ⚠️ Important Rules (Must Follow)
+1. Strict Format: Thought → Action + Action Input or Final Answer
+2. JSON Format: Action Input must be valid JSON
+3. One Tool at a Time
+4. ✅ TASK COMPLETION: After successful execution, if complete → Final Answer
+5. Don't Repeat same operation
+6. Use Available Tools Only
+7. 🚨 Skills Are Not Tools
+...（共 10 条规则）...
+
+## 🚫 Common Errors (Avoid)
+❌ Error 1: After modifying a note, continue modifying the same note
+✅ Correct: After modifying, directly give Final Answer
+...（共 10 条反模式）...
+
+## Runtime Tool Policy                ← 🔑 意图策略："增加"命中了写入模式
+- Write mode: enabled
+- Destructive mode: disabled
+- Execute mode: disabled
+- If a mode is disabled, do not call related tools.
+
+## Example
+...（3 个完整示例：问问题/创建文件/搜索笔记）...
+
+Now start executing the task!
+```
+
+**意图策略推导过程**（`tool-policy.ts` 的 `deriveIntentPolicy()`）：
+
+用户输入 `"在当前文件末尾增加git的常用使用方式"` 中的 `"增加"` 命中了 `writePatterns` 正则 `/增加/`，因此：
+- `allowWrite = true` → `Write mode: enabled`（允许写入工具）
+- `allowDestructive = false` → `Destructive mode: disabled`（禁止删除工具）
+- `allowExecute = false` → `Execute mode: disabled`（禁止执行脚本）
+
+#### 消息 2 — 上下文
+
+由 `chat-send.tsx` 的 `handleAgentMode()` 构建（第 366-369 行），因为编辑器打开了 `技术/git-guide.md`：
+
+```markdown
+## 当前打开的笔记
+文件路径: 技术/git-guide.md
+
+内容:
+# Git 使用指南
+
+## 基础配置
+```bash
+# 设置用户名和邮箱
+git config --global user.name "Your Name"
+git config --global user.email "you@example.com"
+```
+
+## 核心命令
+| 命令 | 说明 |
+|------|------|
+| `git init` | 初始化仓库 |
+| `git clone <url>` | 克隆远程仓库 |
+...（git-guide.md 的完整文件内容）...
+```
+
+这让大模型能"看到"当前文件的全部内容，从而知道应该在哪里追加。
+
+#### 消息 3 — 用户请求
+
+由 `buildIterationUserMessage(1, userInput)` 生成（`react.ts` 第 25-26 行）：
+
+```
+This is iteration 1, please give your Thought and Action (or Final Answer):
+
+User Request: 在当前文件末尾增加git的常用使用方式
+```
+
+#### 大模型预期的回复
+
+大模型收到这 3 条消息后，预期会按 ReAct 格式回复：
+
+**第 1 轮** — 获取编辑器内容（拿到精确行数和版本号）：
+```
+Thought: 用户想在当前笔记末尾追加 Git 常用使用方式。当前打开的是 技术/git-guide.md。
+我需要先获取编辑器的完整内容，拿到总行数和版本号，然后在末尾追加内容。
+Action: get_editor_content
+Action Input: {}
+```
+
+NoteGen 执行 `get_editor_content` 后，将结果作为 Observation 注入，进入第 2 轮迭代。
+
+**第 2 轮** — 在末尾追加内容：
+```
+Thought: 编辑器内容有 45 行，版本号 3。我在末尾追加 Git 常用使用方式。
+Action: replace_editor_content
+Action Input: {"startLine": 45, "endLine": 45, "replaceContent": "...原最后一行...\n\n## 常用使用方式\n\n### 日常工作流\n...", "version": 3}
+```
+
+**第 3 轮** — 完成确认：
+```
+Thought: 内容已成功追加到文件末尾，任务完成。
+Final Answer: 已在 技术/git-guide.md 的末尾添加了 Git 常用使用方式的内容，包括日常工作流、分支管理、冲突解决等部分。
+```
+
+#### 各轮迭代消息数组的变化
+
+| 轮次 | 消息数量 | 变化点 |
+|------|----------|--------|
+| 第 1 轮 | 3 条 | `[system提示词, system上下文, user请求]` |
+| 第 2 轮 | 4 条 | 新增 `system: ## Previous Iterations`（含第 1 轮的 Thought/Action/Observation） |
+| 第 3 轮 | 4 条 | `## Previous Iterations` 更新为包含前 2 轮的完整步骤记录 |
+
+第 2 轮起，用户消息变为：
+```
+## User Request
+在当前文件末尾增加git的常用使用方式
+
+## Previous Action Result
+Observation: {get_editor_content 的返回结果}
+
+This is iteration 2, please give your Thought and Action (or Final Answer) based on the previous result.
+```
