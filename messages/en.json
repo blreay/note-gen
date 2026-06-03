@@ -191,6 +191,27 @@
             "title": "Enable Tray",
             "desc": "Choose to minimize to tray or close app when window is closed"
           }
+        },
+        "logging": {
+          "title": "Logging",
+          "level": {
+            "title": "Log Level",
+            "desc": "Controls logging verbosity, defaults to errors only"
+          },
+          "dir": {
+            "title": "Log Directory",
+            "desc": "Where log files are stored, leave empty for default",
+            "placeholder": "Leave empty for default path",
+            "selectFolder": "Select folder"
+          },
+          "maxFileSize": {
+            "title": "Max File Size",
+            "desc": "Automatically rotate when file exceeds this size"
+          },
+          "maxFiles": {
+            "title": "Max File Count",
+            "desc": "Maximum number of log files to keep, including current"
+          }
         }
       },
       "tools": {

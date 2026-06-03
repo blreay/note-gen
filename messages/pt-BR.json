@@ -192,6 +192,27 @@
             "border": "Cor da borda",
             "shadow": "Cor da sombra"
           }
+        },
+        "logging": {
+          "title": "Configuração de Log",
+          "level": {
+            "title": "Nível de Log",
+            "desc": "Controla o detalhamento do log, padrão apenas erros"
+          },
+          "dir": {
+            "title": "Diretório de Log",
+            "desc": "Onde os arquivos de log são armazenados, deixe vazio para padrão",
+            "placeholder": "Deixe vazio para caminho padrão",
+            "selectFolder": "Selecionar pasta"
+          },
+          "maxFileSize": {
+            "title": "Tamanho Máximo do Arquivo",
+            "desc": "Rotaciona automaticamente quando exceder este tamanho"
+          },
+          "maxFiles": {
+            "title": "Número Máximo de Arquivos",
+            "desc": "Número máximo de arquivos de log a manter, incluindo o atual"
+          }
         }
       },
       "tools": {
