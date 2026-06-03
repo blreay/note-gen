@@ -5,6 +5,7 @@ import { skillManager } from '@/lib/skills'
 import { useSkillsStore } from '@/stores/skills'
 import { reloadMcpTools } from './tools'
 import OpenAI from 'openai'
+import { logger } from '@/lib/logger'
 
 export interface AgentHandlerConfig {
   activeChatId?: number
@@ -29,6 +30,7 @@ export interface AgentHandlerConfig {
 export class AgentHandler {
   private agent: ReActAgent | null = null
   private config: AgentHandlerConfig
+  private log = logger.child('agent/handler')
 
   constructor(config: AgentHandlerConfig) {
     this.config = config
@@ -39,6 +41,7 @@ export class AgentHandler {
     contextOrMessages?: string | OpenAI.Chat.ChatCompletionMessageParam[],
     imageUrls?: string[]
   ): Promise<string> {
+    this.log.debug(`▶ session start input="${userInput.slice(0, 80)}" inputLen=${userInput.length}`)
     const store = useChatStore.getState()
 
     store.resetAgentState()
@@ -61,12 +64,14 @@ export class AgentHandler {
     // 预加载 MCP 工具
     try {
       await reloadMcpTools()
+      this.log.debug('  mcpTools reloaded')
     } catch (error) {
       console.error('[Agent Handler] Failed to reload MCP tools:', error)
     }
 
     // 获取所有可用的 Skills（让 AI 自己选择）
     const activeSkills = await this.getAvailableSkills()
+    this.log.debug(`  skills loaded: [${activeSkills.join(', ')}] count=${activeSkills.length}`)
     // 获取 Skills 的详细信息用于 UI 显示
     const skillsInfo = await this.getSkillsInfo()
     // 将加载的 Skills 信息存储到状态中，用于 UI 显示
@@ -188,10 +193,12 @@ export class AgentHandler {
 
     try {
       const result = await this.agent.run(userInput, contextOrMessages, imageUrls)
+      this.log.debug(`  agent.run() returned, resultLen=${result.length}`)
       store.setAgentState({ isRunning: false })
 
       // 获取完整的 ReAct 步骤
       const steps = this.agent.getSteps()
+      this.log.debug(`◀ session end steps=${steps.length} stopped=false`)
       this.config.onComplete?.(result, steps, false)
       return result
     } catch (error) {
@@ -201,18 +208,21 @@ export class AgentHandler {
       if (error instanceof Error && error.message === 'USER_STOPPED') {
         // 获取已产生的步骤
         const steps = this.agent.getSteps()
+        this.log.debug(`◀ session stopped by user, steps=${steps.length}`)
         // 调用 onComplete，传入空结果和已产生的步骤，标记为已停止
         this.config.onComplete?.('', steps, true)
         return ''
       }
 
       const errorMessage = error instanceof Error ? error.message : String(error)
+      this.log.error('session error:', errorMessage)
       this.config.onError?.(errorMessage)
       throw error
     }
   }
 
   stop() {
+    this.log.debug('stop() called')
     if (this.agent) {
       this.agent.stop()
       // 不立即清空 agent，等待 run 方法中的错误处理完成
