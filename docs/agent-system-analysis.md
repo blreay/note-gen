@@ -7,6 +7,7 @@
 
 ## 目录
 
+0. [背景与技术栈：什么是 ReAct](#0-背景与技术栈什么是-react)
 1. [系统总览](#1-系统总览)
 2. [模块清单与文件地图](#2-模块清单与文件地图)
 3. [核心流程：从输入到执行](#3-核心流程从输入到执行)
@@ -23,6 +24,86 @@
 14. [事件通信系统](#14-事件通信系统)
 15. [类型定义](#15-类型定义)
 16. [数据流全景图](#16-数据流全景图)
+
+---
+
+## 0. 背景与技术栈：什么是 ReAct
+
+### 学术起源
+
+NoteGen 的 Agent 系统基于 **ReAct（Reason + Act）** 范式。ReAct 来自 2022 年 Google Research 和普林斯顿大学联合发表的论文：
+
+> **"ReAct: Synergizing Reasoning and Acting in Language Models"**
+> Shunyu Yao, Jeffrey Zhao, Dian Yu, Nan Du, Izhak Shafran, Karthik Narasimhan, Yuan Cao
+> (ICLR 2023)
+
+核心思想：让 LLM 交替进行**推理（Reasoning）**和**行动（Acting）**，而不是一次性给出答案。LLM 在每轮思考之后可以调用工具，拿到真实结果后再继续思考，形成闭环。
+
+### ReAct 循环示例
+
+```
+用户提问: "帮我创建一个 Git 指南笔记"
+
+迭代 1:
+  Thought:      用户想创建一个关于 Git 的笔记，我需要调用 create_file 工具
+  Action:       create_file
+  Action Input: {"fileName": "git-guide.md", "content": "..."}
+  Observation:  成功创建文件: git-guide.md     ← 工具执行结果，由系统注入
+
+迭代 2:
+  Thought:      文件已成功创建，任务完成
+  Final Answer: 已为您创建了 Git 使用指南笔记 git-guide.md
+```
+
+对比传统 Chain-of-Thought（CoT）：
+- **CoT**：LLM 一次性思考并给出答案，无法与外部世界交互
+- **ReAct**：LLM 在思考之后可以调用工具，拿到真实结果后继续思考
+
+### 业界地位
+
+ReAct 是当前 **AI Agent 领域最主流的编程范式之一**，几乎所有主流框架都支持或基于它：
+
+| 框架/产品 | 与 ReAct 的关系 |
+|-----------|----------------|
+| **LangChain** | 内置 `ReAct Agent`，是其最核心的 Agent 类型 |
+| **LlamaIndex** | 提供 `ReActAgent` 类 |
+| **AutoGPT** | 底层循环本质上是 ReAct 变体 |
+| **Claude Code** | Agentic loop 也是 ReAct 思想 |
+| **OpenAI Assistants** | Function Calling 可以看作 ReAct 的结构化变体 |
+| **Microsoft AutoGen** | 多 Agent 协作中，单个 Agent 的内部循环也是 ReAct |
+
+### NoteGen 的实现选择
+
+NoteGen **没有使用任何第三方 Agent 框架**（如 LangChain），而是完全自主实现了 ReAct 循环。
+
+| 维度 | LangChain ReAct | NoteGen ReAct |
+|------|----------------|---------------|
+| 依赖 | `langchain` 库 | 零依赖，纯手写 |
+| 解析方式 | LangChain 内置 Output Parser | 自己写的 6 级正则解析（`parseAction()`） |
+| 工具调用 | LangChain Tool 抽象 | 自定义 `Tool` 接口 + 手动注册 |
+| 与 LLM 交互 | LangChain LLM 抽象层 | 直接调用 OpenAI 兼容 API（`fetchAiStream`） |
+| 提示词模板 | LangChain PromptTemplate | 手写字符串拼接（`buildSystemPrompt()`） |
+| 历史管理 | LangChain Memory | 手动 `steps[]` 数组 |
+
+自主实现的原因：
+
+1. **轻量**：LangChain 依赖树很重，桌面 App 不想引入大量 npm 包
+2. **可控**：6 级解析、意图策略、Skill 系统、确认流程等深度定制，在框架里需要大量 hack
+3. **前端环境**：LangChain 主要面向 Node.js/Python 后端，Tauri + Next.js 前端环境兼容性差
+4. **多模型兼容**：需要兼容国产模型（千问、DeepSeek、GLM、MiniMax 等）的各种非标准输出格式
+
+### 文本格式 vs 原生 Function Calling
+
+NoteGen 采用**文本格式 ReAct**，而非 OpenAI 的原生 Function Calling：
+
+| 对比项 | 文本格式 ReAct（NoteGen 采用） | 原生 Function Calling |
+|--------|-------------------------------|----------------------|
+| 机制 | LLM 输出纯文本 → 正则解析提取工具名和参数 | LLM 通过结构化 API 返回 `tool_calls` JSON |
+| 兼容性 | ✅ 所有模型（只要能输出文本） | ❌ 仅支持 Function Calling 的模型 |
+| 可靠性 | 依赖模型遵循格式，解析可能失败 | 结构化输出，格式稳定 |
+| 适用场景 | 多模型兼容、定制灵活 | 单一模型、追求稳定 |
+
+选择文本格式正是因为要兼容千问、DeepSeek、MiniMax、GLM 等各种模型——并非所有模型都支持 Function Calling，但所有模型都能输出文本。为了应对不同模型输出格式的差异，NoteGen 实现了 6 级递进式解析策略（详见[第 4.5 节](#45-parseaction-方法第-990-1188-行-6-级解析)）。
 
 ---
 
