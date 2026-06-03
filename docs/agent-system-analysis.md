@@ -24,6 +24,7 @@
 14. [事件通信系统](#14-事件通信系统)
 15. [类型定义](#15-类型定义)
 16. [数据流全景图](#16-数据流全景图)
+17. [关键问题澄清](#17-关键问题澄清)
 
 ---
 
@@ -1303,3 +1304,122 @@ interface AgentState {
 | MCP 工具调用最大轮次 | 10 | `ai/chat.ts` | MCP 原生工具调用的最大循环次数 |
 | 连续重复操作限制 | 5 | `react.ts` | 连续相同工具+参数调用 5 次后强制终止 |
 | TextRank 关键词数 | 15 | `chat-send.tsx` | RAG 检索用的关键词提取数量 |
+
+---
+
+## 17. 关键问题澄清
+
+### Q1: 大模型是怎么知道 NoteGen 有哪些工具可以调用的？是 MCP 吗？
+
+**不是 MCP。是通过系统提示词（System Prompt）以纯文本形式告诉大模型的。**
+
+每轮 ReAct 迭代中，`buildSystemPrompt()`（`react.ts` 第 471 行）都会调用 `getToolDescriptions()`（`tools/index.ts` 第 168 行），将所有已注册工具的信息拼接成纯文本，塞进系统提示词：
+
+```typescript
+// tools/index.ts 第 168-182 行
+export function getToolDescriptions(): string {
+  return getAllToolsSync().map(tool => {
+    const params = tool.parameters.map(p =>
+      `  - ${p.name} (${p.type}${p.required ? ', required' : ', optional'}): ${p.description}`
+    ).join('\n')
+    return `### ${tool.name}\n${tool.description}\nCategory: ${tool.category}\nParameters:\n${params || '  None'}\n`
+  }).join('\n\n')
+}
+```
+
+大模型实际看到的系统提示词中包含如下内容：
+
+```markdown
+## Available Tools
+
+### create_file
+Create a new file in the file system. Returns filePath and fullPath.
+Category: note
+Parameters:
+  - fileName (string, required): Filename (including extension)
+  - content (string, required): File content (plain text)
+  - folderPath (string, optional): Subfolder path, defaults to root
+
+### read_markdown_file
+Read a markdown file from the file system.
+Category: note
+Parameters:
+  - filePath (string, required): File path relative to workspace root
+
+### delete_markdown_file
+Delete a markdown file.
+Category: note
+Parameters:
+  - filePath (string, required): File path to delete
+
+...（60+ 个工具全部以文本形式列出）
+```
+
+大模型读到这段文本后，就"知道"了有哪些工具可用、参数是什么，然后按要求的 ReAct 格式输出工具调用文本。
+
+#### 三种工具来源对比
+
+| 来源 | 告知大模型的方式 | 执行方式 |
+|------|-----------------|---------|
+| **内置工具**（60+ 个） | 系统提示词中的纯文本描述（`getToolDescriptions()`） | 前端 TypeScript 直接调用 `tool.execute()` |
+| **MCP 工具** | 先由 `convertMcpToolToAgentTool()` 转换为内置工具格式，然后**同样通过系统提示词**告知 | 通过 JSON-RPC 调用 MCP 服务器 |
+| **OpenAI Function Calling** | API 请求中的 `tools` 参数（结构化 JSON Schema） | NoteGen 的 Agent 模式**不使用**此方式 |
+
+MCP 在 NoteGen 中的角色是**扩展外部工具的通道**（如接入 Web 搜索、数据库查询等外部服务），但 MCP 工具最终也被转换为与内置工具相同的格式，合并到系统提示词的文本列表中。大模型无法区分哪些是内置工具、哪些是 MCP 工具。
+
+**本质上，大模型看到的就是一段文字说明书。它不"知道"也不"连接"任何 API——它只是按照文本描述输出工具名和参数的文字，然后 NoteGen 的 `parseAction()` 解析这些文字，调用对应的 TypeScript 函数执行真正的操作。**
+
+---
+
+### Q2: Agent 创建笔记后，UI（目录树 + 标签页）是怎么更新的？
+
+**全部在 `create_file` 工具的 `execute()` 函数内部同步完成。不走事件广播，不依赖轮询，直接操作 Zustand store 触发 React 重新渲染。**
+
+完整链路如下：
+
+```
+create_file execute()    [note-tools.ts 第 244 行]
+  │
+  │ ① 写文件到磁盘
+  ├── writeTextFile(path, content)                     [Tauri FS API，第 317-321 行]
+  │
+  │ ② 更新文件树（乐观更新，不重新读盘）
+  ├── articleStore.insertLocalEntry(filePath)           [note-tools.ts 第 334 行]
+  │     └── cloneDeep(fileTree)                         [深拷贝当前树]
+  │     └── insertNodeIntoTree(tree, path)              [在正确的父节点下 unshift 新节点]
+  │     └── setFileTree(sortedTree)                     [写入 Zustand → React 重渲染]
+  │           └── FileManager → Tree → FileItem         [新文件出现在侧边栏]
+  │
+  │ ③ 展开父文件夹
+  ├── articleStore.ensurePathExpanded(filePath)          [note-tools.ts 第 335 行]
+  │     └── collapsibleList += [所有祖先文件夹路径]       [article.ts 第 675-685 行]
+  │     └── Zustand set({ collapsibleList })             [Collapsible 组件打开]
+  │
+  │ ④ 兜底：如果 insertLocalEntry 失败（父文件夹不在内存树中）
+  ├── articleStore.loadFileTree()                        [note-tools.ts 第 337 行]
+  │                                                      [从磁盘重新读取完整目录结构]
+  │
+  │ ⑤ 打开文件（仅 .md 文件）
+  └── articleStore.setActiveFilePath(filePath)            [note-tools.ts 第 341-343 行]
+        │
+        ├── set({ activeFilePath, currentArticle: '' })  [Zustand 原子更新]
+        ├── emitter.emit('article-opened', { path })     [通知其他组件]
+        ├── readArticle(filePath)                         [从磁盘读取文件内容]
+        │     └── set({ currentArticle: 文件内容 })       [编辑器渲染内容]
+        │
+        └── EditorLayout useEffect                        [editor-layout.tsx 第 321-345 行]
+              │  [监听 activeFilePath 变化]
+              └── addTab({ id, path, name })              [添加新标签页]
+                    └── set({ openTabs, activeTabId })    [标签栏重渲染，新标签高亮]
+```
+
+#### 关键设计决策
+
+| 问题 | 答案 |
+|------|------|
+| 用什么驱动 UI 更新？ | **Zustand store 的 `set()`**——React 组件订阅了 store，state 一变就自动重渲染 |
+| 用事件总线通知吗？ | 文件树更新**不用**事件总线。唯一用 emitter 的是 `article-opened` 通知编辑器 |
+| 有文件系统 watch/轮询吗？ | **没有**。`create_file` 写盘后**主动**把新节点插入内存中的 `fileTree` |
+| 非 `.md` 文件会自动打开吗？ | **不会**。只出现在侧边栏目录树中，不在编辑器中打开 |
+| 这些 UI 更新逻辑在 Agent 流程的哪一步？ | 在 `act()` → `tool.execute()` 内部，即工具执行阶段。Agent 的 `onComplete` 回调**不做任何文件树刷新** |
+| 文件树更新是读盘还是内存操作？ | 优先内存操作（`insertLocalEntry` 直接操作树结构），只在失败时兜底读盘（`loadFileTree`） |
