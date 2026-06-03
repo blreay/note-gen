@@ -1,5 +1,8 @@
 import OpenAI from 'openai';
 import { getAISettings, validateAIService, prepareMessages, createOpenAIClient, handleAIError, convertImageToBase64 } from './utils';
+import { logger } from '@/lib/logger'
+
+const log = logger.child('ai/chat')
 
 /**
  * 非流式方式获取AI结果
@@ -139,6 +142,8 @@ export async function fetchAiStream(
       requestParams.tool_choice = 'auto'
     }
 
+    log.debug(`fetchAiStream: model=${requestParams.model} temperature=${requestParams.temperature} messageCount=${preparedMessages.length} hasTools=${!!requestParams.tools}`)
+
     const stream = await openai.chat.completions.create(requestParams, {
       signal: abortSignal
     }) as unknown as AsyncIterable<OpenAI.Chat.Completions.ChatCompletionChunk>
@@ -215,6 +220,8 @@ export async function fetchAiStream(
       onUpdate(fullContent)
     }
 
+    log.debug(`fetchAiStream: complete contentLen=${fullContent.length} thinkingLen=${thinking.length} toolCalls=${toolCalls.length}`)
+
     // 如果有工具调用，执行工具并继续对话（支持多轮工具调用）
     if (toolCalls.length > 0) {
       // 动态导入 callTool 函数（避免循环依赖）
@@ -274,6 +281,7 @@ export async function fetchAiStream(
             }
             
             // 调用 MCP 工具
+            log.debug(`  MCP tool call: ${serverId}/${toolName}`)
             const result = await callTool(serverId, toolName, args)
             
             // 格式化结果
@@ -281,7 +289,9 @@ export async function fetchAiStream(
               .filter(c => c.type === 'text')
               .map(c => c.text)
               .join('\n')
-            
+
+            log.debug(`  MCP tool result: resultLen=${resultText.length}`)
+
             // 更新 MCP 工具调用状态为成功
             if (chatId && mcpToolCallId) {
               const { default: useChatStore } = await import('@/stores/chat')
@@ -413,6 +423,7 @@ export async function fetchAiStream(
       
       if (iteration >= maxIterations) {
         console.warn('达到最大工具调用次数限制')
+        log.warn(`fetchAiStream: MCP tool loop reached max iterations (${maxIterations})`)
         const maxIterationsText = t ? t('record.mark.mark.chat.mcp.maxIterationsReached') : '⚠️ 达到最大工具调用次数限制'
         onUpdate(fullContent + '\n\n' + maxIterationsText)
       }
@@ -421,6 +432,7 @@ export async function fetchAiStream(
     return fullContent
   } catch (error) {
     console.error('[fetchAiStream] Error:', error)
+    log.error('fetchAiStream error:', error instanceof Error ? error.message : String(error))
     return handleAIError(error) || ''
   }
 }
