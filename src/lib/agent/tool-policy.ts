@@ -1,3 +1,7 @@
+import { logger } from '@/lib/logger'
+
+const log = logger.child('agent/policy')
+
 export type ToolRiskLevel = 'low' | 'medium' | 'high'
 
 export interface IntentPolicy {
@@ -123,6 +127,7 @@ export function deriveIntentPolicy(userInput: string): IntentPolicy {
       skillExecutionPatterns.some((pattern) => pattern.test(input))) &&
     !denyExecutePatterns.some((pattern) => pattern.test(input))
 
+  log.debug(`deriveIntentPolicy: input="${input.slice(0, 80)}" write=${allowWrite} destructive=${allowDestructive} execute=${allowExecute}`)
   return {
     allowWrite,
     allowDestructive,
@@ -206,40 +211,50 @@ export function evaluateIntentAwareToolPolicy(
   const isExecute = isExecuteTool(toolName)
 
   if (isExecute && !intentPolicy.allowExecute) {
-    return {
+    const result: ToolPolicyEvaluationResult = {
       allowed: false,
       requiresConfirmation: false,
       reason: '用户未明确要求执行命令或脚本',
     }
+    log.debug(`evaluatePolicy: tool=${toolName} risk=${risk} → blocked, reason="${result.reason}"`)
+    return result
   }
 
   if (isDestructive && !intentPolicy.allowDestructive) {
-    return {
+    const result: ToolPolicyEvaluationResult = {
       allowed: false,
       requiresConfirmation: false,
       reason: '用户未明确要求删除或清空操作',
     }
+    log.debug(`evaluatePolicy: tool=${toolName} risk=${risk} → blocked, reason="${result.reason}"`)
+    return result
   }
 
   if (risk === 'medium') {
-    return {
+    const result: ToolPolicyEvaluationResult = {
       allowed: true,
       requiresConfirmation: true,
     }
+    log.debug(`evaluatePolicy: tool=${toolName} risk=${risk} → allowed, confirmation=${result.requiresConfirmation}`)
+    return result
   }
 
   if (risk === 'high' && !isDestructive && !isExecute && !intentPolicy.allowWrite) {
-    return {
+    const result: ToolPolicyEvaluationResult = {
       allowed: false,
       requiresConfirmation: false,
       reason: '高风险写入操作需要用户明确修改意图',
     }
+    log.debug(`evaluatePolicy: tool=${toolName} risk=${risk} → blocked, reason="${result.reason}"`)
+    return result
   }
 
-  return {
+  const result: ToolPolicyEvaluationResult = {
     allowed: true,
     requiresConfirmation: risk === 'high',
   }
+  log.debug(`evaluatePolicy: tool=${toolName} risk=${risk} → allowed, confirmation=${result.requiresConfirmation}`)
+  return result
 }
 
 export function isRecoverableWriteTool(toolName: string, category: string): boolean {
