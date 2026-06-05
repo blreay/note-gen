@@ -579,12 +579,18 @@ const useSettingStore = create<SettingState>((set, get) => ({
     })
 
     // Initialize logger with current config
-    const currentState = get()
+    // 注意：上面的 Object.entries(get()).forEach(async ...) 是异步 forEach，
+    // 此时 store 的字段可能还没从 store.json 中水合完成。
+    // 所以直接从 store.json 读取日志配置，而不依赖 get() 的值。
+    const logLevel = (await store.get('logLevel')) as string || 'error'
+    const logDir = (await store.get('logDir')) as string || ''
+    const logMaxFileSize = (await store.get('logMaxFileSize')) as number || 10
+    const logMaxFiles = (await store.get('logMaxFiles')) as number || 5
     await logger.init({
-      level: currentState.logLevel,
-      dir: currentState.logDir,
-      maxFileSize: currentState.logMaxFileSize,
-      maxFiles: currentState.logMaxFiles,
+      level: logLevel,
+      dir: logDir,
+      maxFileSize: logMaxFileSize,
+      maxFiles: logMaxFiles,
     })
 
     // Subscribe to log config changes for hot-reload

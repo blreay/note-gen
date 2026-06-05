@@ -1283,6 +1283,25 @@ Final Answer: 无法完成任务，请稍后重试或检查 AI 配置`
         }
       }
 
+      // ── 第 7 级：JSON 对象格式的 action 调用 ──────────────────────────
+      // 某些模型（千问等）会输出 JSON 格式的工具调用，而非 ReAct 文本格式：
+      // {"action": "check_folder_exists", "action_input": {"folderPath": "技术"}}
+      // 或者嵌入在思考文字之后
+      {
+        // 在 cleaned 文本中查找包含 "action" 和已知工具名的 JSON 对象
+        const jsonActionMatch = cleaned.match(/\{[\s\S]*?"action"\s*:\s*"([a-zA-Z0-9_-]+)"[\s\S]*?"action_input"\s*:\s*(\{[\s\S]*)/i)
+        if (jsonActionMatch) {
+          const tool = jsonActionMatch[1]
+          if (knownToolNames.has(tool)) {
+            const params = this.extractJsonObject(jsonActionMatch[2])
+            if (params) {
+              this.log.debug(`  parseAction: level-7 matched (JSON object format), tool=${tool}`)
+              return { tool, params }
+            }
+          }
+        }
+      }
+
       this.log.debug(`  parseAction: no match, thoughtLen=${cleaned.length}`)
       return null
     } catch (error) {
