@@ -1302,6 +1302,55 @@ Final Answer: 无法完成任务，请稍后重试或检查 AI 配置`
         }
       }
 
+      // ── 第 8 级：<tool_call> 标签 + Markdown 表格参数 ──────────────────
+      // 某些模型会输出类似以下格式：
+      //   <tool_call>rename_file
+      //   | 参数 | 值 |
+      //   |------|-----|
+      //   | filePath | tmp.md |
+      //   | newName | 故障恢复类术语.md |
+      // 或者不带表格直接跟 JSON
+      {
+        const toolCallMatch = cleaned.match(/<tool_call>\s*([a-zA-Z0-9_-]+)([\s\S]*?)(?:<\/tool_call>|$)/i)
+        if (toolCallMatch) {
+          const tool = toolCallMatch[1].trim()
+          if (knownToolNames.has(tool)) {
+            const body = toolCallMatch[2].trim()
+            // 尝试从 markdown 表格中提取参数
+            const params: Record<string, any> = {}
+            // 匹配 | key | value | 格式的行（跳过表头和分隔行）
+            const tableRows = body.split('\n').filter(line => {
+              const trimmed = line.trim()
+              return trimmed.startsWith('|') &&
+                !trimmed.match(/^\|[\s-]+\|[\s-]+\|$/) && // 跳过分隔行 |------|-----|
+                !trimmed.match(/^\|\s*参数\s*\|/) &&       // 跳过中文表头
+                !trimmed.match(/^\|\s*param/i)              // 跳过英文表头
+            })
+            if (tableRows.length > 0) {
+              for (const row of tableRows) {
+                const cells = row.split('|').map(c => c.trim()).filter(Boolean)
+                if (cells.length >= 2) {
+                  params[cells[0]] = cells[1]
+                }
+              }
+              this.log.debug(`  parseAction: level-8 matched (<tool_call> + table), tool=${tool}`)
+              return { tool, params }
+            }
+            // 如果不是表格，尝试 JSON 解析
+            const jsonParams = this.extractJsonObject(body)
+            if (jsonParams) {
+              this.log.debug(`  parseAction: level-8 matched (<tool_call> + JSON), tool=${tool}`)
+              return { tool, params: jsonParams }
+            }
+            // 无参数的工具调用
+            if (!body || body.length < 3) {
+              this.log.debug(`  parseAction: level-8 matched (<tool_call> no params), tool=${tool}`)
+              return { tool, params: {} }
+            }
+          }
+        }
+      }
+
       this.log.debug(`  parseAction: no match, thoughtLen=${cleaned.length}`)
       return null
     } catch (error) {
