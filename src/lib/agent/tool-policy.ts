@@ -80,10 +80,11 @@ export function deriveIntentPolicy(userInput: string): IntentPolicy {
   const input = userInput.toLowerCase()
 
   const writePatterns = [
-    /创建|新建|新增|写入|改写|修改|编辑|更新|重写|插入|替换|保存|优化|精简|简化|润色|调整|补充|增加|添加|补全|扩写|完善|丰富|重命名|改名|命名为|移动|复制|草拟|起草|写文章|写内容|生成文章/,
+    /创建|新建|新增|写入|改写|修改|编辑|更新|重写|插入|替换|保存|优化|精简|简化|润色|调整|补充|增加|添加|补全|扩写|完善|丰富|重命名|改名|命名为|移动|复制|草拟|起草|写文章|写内容|生成文章|整理|归纳|汇总|总结成|记录/,
     /写(一篇|个|篇)?(关于|成|出)?/,
+    /(整理|归纳|汇总).*(笔记|文档|文件|内容)/,
     /改成|改为/,
-    /\b(create|write|draft|modify|edit|update|insert|replace|save|rename|move|copy)\b/i,
+    /\b(create|write|draft|modify|edit|update|insert|replace|save|rename|move|copy|organize|summarize)\b/i,
   ]
   const destructivePatterns = [
     /删除|移除|清空|清除/,

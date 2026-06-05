@@ -321,7 +321,29 @@ export class ReActAgent {
                              normalizedThought.includes('最终答案') ||
                              /Action:\s*Final\s*Answer/i.test(thought)
 
-      if (hasFinalAnswer) {
+      // 🔑 关键检查：如果 LLM 同时输出了 Action 和 Final Answer，
+      // 且 Action 出现在 Final Answer 之前，说明 LLM 想先执行工具
+      // 但错误地自己编造了 Observation 和 Final Answer。
+      // 此时应该优先执行 Action，忽略 LLM 编造的部分。
+      // （常见于千问、DeepSeek 等 thinking 模型）
+      const hasActionBeforeFinalAnswer = hasFinalAnswer && (() => {
+        // 排除 "Action: Final Answer" 这种特殊格式（这不是真的 Action）
+        if (/Action:\s*Final\s*Answer/i.test(thought)) return false
+
+        const actionMatch = thought.match(/Action:\s*([a-zA-Z0-9_-]+)/i)
+        if (!actionMatch) return false
+
+        const actionPos = thought.indexOf(actionMatch[0])
+        // 找到 Final Answer 的位置
+        let finalAnswerPos = -1
+        if (thought.includes('Final Answer:')) finalAnswerPos = thought.indexOf('Final Answer:')
+        else if (thought.includes('Final Answer：')) finalAnswerPos = thought.indexOf('Final Answer：')
+        else if (thought.includes('最终答案')) finalAnswerPos = thought.indexOf('最终答案')
+
+        return finalAnswerPos > 0 && actionPos < finalAnswerPos
+      })()
+
+      if (hasFinalAnswer && !hasActionBeforeFinalAnswer) {
         // 直接提取 Final Answer 后面的内容作为 Markdown 格式返回
         if (thought.includes('Final Answer:')) {
           finalAnswer = thought.split('Final Answer:')[1].trim()
@@ -371,7 +393,25 @@ export class ReActAgent {
         }
       }
 
-      const action = this.parseAction(thought)
+      // 如果 LLM 同时输出了 Action + Final Answer（Action 在前），
+      // 截断到 Final Answer 之前，只保留 Action 部分给 parseAction 解析
+      let thoughtForParsing = thought
+      if (hasActionBeforeFinalAnswer) {
+        this.log.debug('  Action before Final Answer detected, truncating thought for parsing')
+        // 找到 Final Answer 的位置并截断
+        let cutPos = -1
+        if (thought.includes('Final Answer:')) cutPos = thought.indexOf('Final Answer:')
+        else if (thought.includes('Final Answer：')) cutPos = thought.indexOf('Final Answer：')
+        else if (thought.includes('最终答案')) cutPos = thought.indexOf('最终答案')
+        // 同时截断 LLM 编造的 Observation（如果有）
+        const obsPos = thought.indexOf('Observation:')
+        if (obsPos > 0 && (cutPos < 0 || obsPos < cutPos)) cutPos = obsPos
+        if (cutPos > 0) {
+          thoughtForParsing = thought.substring(0, cutPos).trim()
+        }
+      }
+
+      const action = this.parseAction(thoughtForParsing)
       if (!action) {
         if (thought.includes('Action:')) {
           const observation = 'Action Input JSON 无法解析。请保持动作不变，并只重新输出一次有效的 JSON 参数。'
