@@ -85,9 +85,18 @@ export function EditorLayout() {
 
   const [sourceMode, setSourceMode] = useState(false)
   const sourceContentRef = useRef<string>('')
+  const saveDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const { shortcuts } = useShortcutStore()
 
   const sourceModeShortcut = shortcuts.find(s => s.key === 'toggleSourceMode')?.value || 'CommandOrControl+T'
+
+  useEffect(() => {
+    return () => {
+      if (saveDebounceRef.current) {
+        clearTimeout(saveDebounceRef.current)
+      }
+    }
+  }, [])
 
   const handleToggleSourceMode = useCallback(() => {
     setSourceMode(prev => {
@@ -99,7 +108,10 @@ export function EditorLayout() {
         }
       } else {
         if (sourceContentRef.current) {
-          emitter.emit('external-content-update', sourceContentRef.current)
+          // Delay emit to ensure MdEditor is mounted/rendered before receiving the content
+          setTimeout(() => {
+            emitter.emit('external-content-update', sourceContentRef.current)
+          }, 0)
         }
       }
       emitter.emit('source-mode-changed', next)
@@ -130,7 +142,12 @@ export function EditorLayout() {
     const currentTab = tabs.find(t => t.id === localActiveTabId)
     if (currentTab) {
       tabContentsRef.current[currentTab.path] = content
-      useArticleStore.getState().saveCurrentArticle(content)
+      if (saveDebounceRef.current) {
+        clearTimeout(saveDebounceRef.current)
+      }
+      saveDebounceRef.current = setTimeout(() => {
+        useArticleStore.getState().saveCurrentArticle(content)
+      }, 400)
     }
   }, [tabs, localActiveTabId])
 

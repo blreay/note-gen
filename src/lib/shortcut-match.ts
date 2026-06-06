@@ -17,6 +17,9 @@ export function matchesShortcut(event: KeyboardEvent, shortcutValue: string): bo
 
   if (modifiers.includes('commandorcontrol')) {
     if (!ctrlOrMeta) return false
+    // Prevent Ctrl+Cmd+Key false triggers: check the OTHER modifier is NOT pressed
+    if (isMac && event.ctrlKey) return false
+    if (!isMac && event.metaKey) return false
   } else {
     if (needsCtrl && !event.ctrlKey) return false
     if (needsMeta && !event.metaKey) return false

@@ -34,7 +34,6 @@ const inAppOnlyShortcuts = new Set(['toggleSourceMode'])
 
 async function bindShortcut(shortcut: Shortcut) {
   if (inAppOnlyShortcuts.has(shortcut.key)) return
-  await unregisterAll()
   try {
     if (shortcut.value) {
       await register(shortcut.value, (event) => {
@@ -45,6 +44,13 @@ async function bindShortcut(shortcut: Shortcut) {
     }
   } catch (error) {
     console.error(`Failed to register shortcut ${shortcut.value}:`, error);
+  }
+}
+
+async function bindAllShortcuts(shortcuts: Shortcut[]) {
+  await unregisterAll()
+  for (const shortcut of shortcuts) {
+    await bindShortcut(shortcut)
   }
 }
 
@@ -64,15 +70,11 @@ const useShortcutStore = create<SettingState>((set, get) => ({
         }
       })
       set({ shortcuts: mergeShortcuts })
-      mergeShortcuts.forEach(async (shortcut) => {
-        await bindShortcut(shortcut)
-      })
+      await bindAllShortcuts(mergeShortcuts)
     } else {
       await store.set('shortcuts', defaultShortcuts)
       set({ shortcuts: defaultShortcuts })
-      defaultShortcuts.forEach(async (shortcut) => {
-        await bindShortcut(shortcut)
-      })
+      await bindAllShortcuts(defaultShortcuts)
     }
   },
 
@@ -86,9 +88,7 @@ const useShortcutStore = create<SettingState>((set, get) => ({
     })
     await store.set('shortcuts', newShortcuts)
     set({ shortcuts: newShortcuts })
-    newShortcuts.forEach(async (shortcut: Shortcut) => {
-      await bindShortcut(shortcut)
-    })
+    await bindAllShortcuts(newShortcuts)
   },
 
   resetDefault: async (key: string) => {
@@ -101,9 +101,7 @@ const useShortcutStore = create<SettingState>((set, get) => ({
     })
     await store.set('shortcuts', newShortcuts)
     set({ shortcuts: newShortcuts })
-    newShortcuts.forEach(async (shortcut: Shortcut) => {
-      await bindShortcut(shortcut)
-    })
+    await bindAllShortcuts(newShortcuts)
   },
 }))
 

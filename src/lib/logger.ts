@@ -81,8 +81,11 @@ class Logger {
   private currentFileSize = 0
   private initialized = false
   private preInitQueue: string[] = []
-  private errorReported = false
+  private lastErrorReportedAt = 0
+  private readonly errorReportIntervalMs = 60_000
   private rotating = false
+  private rotateBuffer: string[] = []
+  private preInitQueueOverflowWarned = false
 
   async init(config?: Partial<LoggerConfig>): Promise<void> {
     const cfg = { ...DEFAULT_CONFIG, ...config }
@@ -201,6 +204,9 @@ class Logger {
     if (!this.initialized) {
       if (this.preInitQueue.length < PRE_INIT_QUEUE_MAX) {
         this.preInitQueue.push(line)
+      } else if (!this.preInitQueueOverflowWarned) {
+        console.warn('[Logger] preInitQueue is full, logs are being dropped. Call logger.init() to start writing to file.')
+        this.preInitQueueOverflowWarned = true
       }
       return
     }
@@ -210,15 +216,20 @@ class Logger {
       this.rotate()
     }
 
-    this.appendToFile(line)
+    if (this.rotating) {
+      this.rotateBuffer.push(line)
+    } else {
+      this.appendToFile(line)
+    }
     this.currentFileSize += lineBytes
   }
 
   private appendToFile(content: string): void {
     writeTextFile(this.logFilePath, content, { append: true }).catch(error => {
-      if (!this.errorReported) {
+      const now = Date.now()
+      if (now - this.lastErrorReportedAt >= this.errorReportIntervalMs) {
         console.error('[Logger] write failed:', error)
-        this.errorReported = true
+        this.lastErrorReportedAt = now
       }
     })
   }
@@ -252,6 +263,11 @@ class Logger {
       console.error('[Logger] rotate failed:', error)
     } finally {
       this.rotating = false
+      if (this.rotateBuffer.length > 0) {
+        const buffered = this.rotateBuffer.join('')
+        this.rotateBuffer = []
+        this.appendToFile(buffered)
+      }
     }
   }
 

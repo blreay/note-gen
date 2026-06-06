@@ -1681,7 +1681,7 @@ Final Answer: 无法完成任务，请稍后重试或检查 AI 配置`
       toolCall.result = result
       this.config.onToolCall?.(toolCall)
 
-        if (result.success) {
+      if (result.success) {
         // 特殊处理 select_skill 工具
         if (toolName === 'select_skill' && result.data?.selected_skills) {
           const selectedSkillIds: string[] = result.data.selected_skills
@@ -1698,7 +1698,7 @@ Final Answer: 无法完成任务，请稍后重试或检查 AI 配置`
         let observation = result.message || `工具 ${toolName} 执行成功。`
 
         // 如果有数据，根据数据类型进行格式化
-          if (result.data) {
+        if (result.data) {
           // 特殊处理 MCP 搜索结果（category 为 'mcp' 的工具）
           if (tool.category === 'mcp') {
             // 从思考内容中提取简短标题

@@ -61,9 +61,9 @@ export function TitleBar({ onSearchClick, onActivityClick, activityOpen = false 
     const handleSourceModeChanged = (active: boolean) => {
       setSourceMode(active)
     }
-    emitter.on('source-mode-changed', handleSourceModeChanged as any)
+    emitter.on('source-mode-changed', handleSourceModeChanged)
     return () => {
-      emitter.off('source-mode-changed', handleSourceModeChanged as any)
+      emitter.off('source-mode-changed', handleSourceModeChanged)
     }
   }, [])
 

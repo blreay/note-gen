@@ -116,6 +116,8 @@ interface Events {
   'mobile-editor-toggle-outline': void;
   'editor-can-undo-redo': { resolve: (can: { undo: boolean; redo: boolean }) => void };
   'editor-undo-redo-changed': { undo: boolean; redo: boolean };
+  'source-mode-changed': boolean;
+  'toggle-source-mode': void;
   'editor-replace': {
     content?: string;
     range?: { from: number; to: number };

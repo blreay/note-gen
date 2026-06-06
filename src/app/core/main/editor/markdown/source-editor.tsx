@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useCallback } from 'react'
 import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter } from '@codemirror/view'
-import { EditorState } from '@codemirror/state'
+import { EditorState, Compartment } from '@codemirror/state'
 import { markdown } from '@codemirror/lang-markdown'
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language'
@@ -35,13 +35,18 @@ export function SourceEditor({ initialContent, onChange, className }: SourceEdit
   const containerRef = useRef<HTMLDivElement>(null)
   const viewRef = useRef<EditorView | null>(null)
   const onChangeRef = useRef(onChange)
+  const themeCompartmentRef = useRef(new Compartment())
   onChangeRef.current = onChange
 
   const { theme, systemTheme } = useTheme()
   const isDark = theme === 'dark' || (theme === 'system' && systemTheme === 'dark')
 
-  const getExtensions = useCallback((dark: boolean) => {
-    const extensions = [
+  const getThemeExtension = useCallback((dark: boolean) => {
+    return dark ? oneDark : syntaxHighlighting(lightHighlightStyle)
+  }, [])
+
+  const getExtensions = useCallback((dark: boolean, compartment: Compartment) => {
+    return [
       lineNumbers(),
       highlightActiveLine(),
       highlightActiveLineGutter(),
@@ -57,23 +62,19 @@ export function SourceEditor({ initialContent, onChange, className }: SourceEdit
         '&': { height: '100%' },
         '.cm-scroller': { overflow: 'auto' },
       }),
+      compartment.of(dark ? oneDark : syntaxHighlighting(lightHighlightStyle)),
     ]
-
-    if (dark) {
-      extensions.push(oneDark)
-    } else {
-      extensions.push(syntaxHighlighting(lightHighlightStyle))
-    }
-
-    return extensions
   }, [])
 
+  // Create editor once on mount
   useEffect(() => {
     if (!containerRef.current) return
 
+    const compartment = themeCompartmentRef.current
+
     const state = EditorState.create({
       doc: initialContent,
-      extensions: getExtensions(isDark),
+      extensions: getExtensions(isDark, compartment),
     })
 
     const view = new EditorView({
@@ -87,21 +88,37 @@ export function SourceEditor({ initialContent, onChange, className }: SourceEdit
       view.destroy()
       viewRef.current = null
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // Handle initialContent changes via dispatch (preserves undo history)
   useEffect(() => {
     if (!viewRef.current) return
 
     const view = viewRef.current
     const currentDoc = view.state.doc.toString()
+    if (currentDoc !== initialContent) {
+      view.dispatch({
+        changes: {
+          from: 0,
+          to: currentDoc.length,
+          insert: initialContent,
+        },
+      })
+    }
+  }, [initialContent])
 
-    const state = EditorState.create({
-      doc: currentDoc,
-      extensions: getExtensions(isDark),
+  // Handle theme changes via compartment reconfiguration (preserves undo history)
+  useEffect(() => {
+    const view = viewRef.current
+    if (!view) return
+
+    view.dispatch({
+      effects: themeCompartmentRef.current.reconfigure(
+        getThemeExtension(isDark)
+      ),
     })
-
-    view.setState(state)
-  }, [isDark, getExtensions])
+  }, [isDark, getThemeExtension])
 
   return (
     <div
