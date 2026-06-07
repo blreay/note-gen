@@ -126,6 +126,7 @@ class Logger {
         const lines = this.preInitQueue.join('')
         this.preInitQueue = []
         this.appendToFile(lines)
+        this.currentFileSize += new TextEncoder().encode(lines).length
       }
     } catch (error) {
       console.error('[Logger] init failed:', error)
@@ -220,8 +221,8 @@ class Logger {
       this.rotateBuffer.push(line)
     } else {
       this.appendToFile(line)
+      this.currentFileSize += lineBytes
     }
-    this.currentFileSize += lineBytes
   }
 
   private appendToFile(content: string): void {
@@ -267,6 +268,7 @@ class Logger {
         const buffered = this.rotateBuffer.join('')
         this.rotateBuffer = []
         this.appendToFile(buffered)
+        this.currentFileSize += new TextEncoder().encode(buffered).length
       }
     }
   }

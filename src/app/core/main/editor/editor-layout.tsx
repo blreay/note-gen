@@ -145,8 +145,12 @@ export function EditorLayout() {
       if (saveDebounceRef.current) {
         clearTimeout(saveDebounceRef.current)
       }
+      const targetPath = currentTab.path
       saveDebounceRef.current = setTimeout(() => {
-        useArticleStore.getState().saveCurrentArticle(content)
+        const state = useArticleStore.getState()
+        if (state.activeFilePath === targetPath) {
+          state.saveCurrentArticle(content)
+        }
       }, 400)
     }
   }, [tabs, localActiveTabId])
@@ -364,8 +368,14 @@ export function EditorLayout() {
   // Handle tab switch
   const handleTabSwitch = useCallback((path: string) => {
     if (sourceMode) {
-      if (sourceContentRef.current) {
-        emitter.emit('external-content-update', sourceContentRef.current)
+      // Flush pending debounce save before switching tab
+      if (saveDebounceRef.current) {
+        clearTimeout(saveDebounceRef.current)
+        saveDebounceRef.current = null
+      }
+      const currentTab = tabs.find(t => t.id === localActiveTabId)
+      if (currentTab && tabContentsRef.current[currentTab.path]) {
+        useArticleStore.getState().saveCurrentArticle(tabContentsRef.current[currentTab.path])
       }
       setSourceMode(false)
       emitter.emit('source-mode-changed', false)
@@ -373,7 +383,7 @@ export function EditorLayout() {
     if (path) {
       setActiveFilePath(path)
     }
-  }, [setActiveFilePath, sourceMode])
+  }, [setActiveFilePath, sourceMode, tabs, localActiveTabId])
 
   // Handle new tab button - return to empty state without creating a file
   const handleNewTab = useCallback(async () => {

@@ -584,8 +584,8 @@ const useSettingStore = create<SettingState>((set, get) => ({
     // 所以直接从 store.json 读取日志配置，而不依赖 get() 的值。
     const logLevel = (await store.get('logLevel')) as string || 'error'
     const logDir = (await store.get('logDir')) as string || ''
-    const logMaxFileSize = (await store.get('logMaxFileSize')) as number || 10
-    const logMaxFiles = (await store.get('logMaxFiles')) as number || 5
+    const logMaxFileSize = (await store.get('logMaxFileSize')) as number ?? 10
+    const logMaxFiles = (await store.get('logMaxFiles')) as number ?? 5
     await logger.init({
       level: logLevel,
       dir: logDir,

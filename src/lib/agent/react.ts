@@ -1289,7 +1289,7 @@ Final Answer: 无法完成任务，请稍后重试或检查 AI 配置`
       // 或者嵌入在思考文字之后
       {
         // 在 cleaned 文本中查找包含 "action" 和已知工具名的 JSON 对象
-        const jsonActionMatch = cleaned.match(/\{[\s\S]*?"action"\s*:\s*"([a-zA-Z0-9_-]+)"[\s\S]*?"action_input"\s*:\s*(\{[\s\S]*)/i)
+        const jsonActionMatch = cleaned.match(/\{\s*"action"\s*:\s*"([a-zA-Z0-9_-]+)"\s*,\s*"action_input"\s*:\s*(\{[\s\S]*)/i)
         if (jsonActionMatch) {
           const tool = jsonActionMatch[1]
           if (knownToolNames.has(tool)) {
@@ -1322,7 +1322,7 @@ Final Answer: 无法完成任务，请稍后重试或检查 AI 配置`
             const tableRows = body.split('\n').filter(line => {
               const trimmed = line.trim()
               return trimmed.startsWith('|') &&
-                !trimmed.match(/^\|[\s-]+\|[\s-]+\|$/) && // 跳过分隔行 |------|-----|
+                !trimmed.match(/^\|[\s-]+(\|[\s-]+)+\|$/) && // 跳过分隔行 |------|-----|
                 !trimmed.match(/^\|\s*参数\s*\|/) &&       // 跳过中文表头
                 !trimmed.match(/^\|\s*param/i)              // 跳过英文表头
             })
@@ -1330,7 +1330,7 @@ Final Answer: 无法完成任务，请稍后重试或检查 AI 配置`
               for (const row of tableRows) {
                 const cells = row.split('|').map(c => c.trim()).filter(Boolean)
                 if (cells.length >= 2) {
-                  params[cells[0]] = cells[1]
+                  params[cells[0]] = cells.slice(1).join('|').trim()
                 }
               }
               this.log.debug(`  parseAction: level-8 matched (<tool_call> + table), tool=${tool}`)
