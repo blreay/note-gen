@@ -1,0 +1,92 @@
+name: 'Release Windows'
+
+on:
+  workflow_dispatch:
+    inputs:
+      draft:
+        description: 'Create as draft release'
+        required: false
+        default: true
+        type: boolean
+
+jobs:
+  release-windows:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+          run_install: true
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: 'pnpm'
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            src-tauri/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Install frontend dependencies
+        run: pnpm install
+
+      - name: Get version
+        id: get_version
+        shell: bash
+        run: |
+          VERSION=$(grep -o '"version": *"[^"]*"' src-tauri/tauri.conf.json | head -1 | sed 's/"version": *"\(.*\)"/\1/')
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Version: $VERSION"
+
+      - name: Build Tauri app (Windows)
+        uses: tauri-apps/tauri-action@v0.5.23
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: note-gen-v__VERSION__
+          releaseName: 'NoteGen v__VERSION__'
+          releaseBody: 'Windows release build.'
+          releaseDraft: ${{ inputs.draft }}
+          prerelease: false
+
+      - name: Upload NSIS installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: NoteGen-${{ steps.get_version.outputs.version }}-windows-nsis
+          path: src-tauri/target/release/bundle/nsis/NoteGen_*.exe
+          if-no-files-found: warn
+
+      - name: Upload MSI installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: NoteGen-${{ steps.get_version.outputs.version }}-windows-msi
+          path: src-tauri/target/release/bundle/msi/NoteGen_*.msi
+          if-no-files-found: warn
+
+      - name: Upload updater signature
+        uses: actions/upload-artifact@v4
+        with:
+          name: NoteGen-${{ steps.get_version.outputs.version }}-windows-updater-sig
+          path: src-tauri/target/release/bundle/nsis/NoteGen_*.exe.sig
+          if-no-files-found: warn
